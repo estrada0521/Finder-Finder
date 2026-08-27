@@ -4,8 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-pub const DEFAULT_DB_ROOT: &str = "/Users/okadaharuto/Library/CloudStorage/GoogleDrive-ryutan521@gmail.com/マイドライブ/Lab/okadaharuto-DB";
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
@@ -15,7 +13,12 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            db_root: DEFAULT_DB_ROOT.to_string(),
+            db_root: std::env::var("LAB_BROWSER_DB_ROOT").unwrap_or_else(|_| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_default())
+                    .join("Documents/Records")
+                    .to_string_lossy()
+                    .into_owned()
+            }),
         }
     }
 }

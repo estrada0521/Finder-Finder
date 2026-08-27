@@ -6,3 +6,6 @@ Native macOS browser for linked local records. The supported entry point is
 
 It reads existing record directories, metadata, declared links, and payloads;
 then provides direct Quick Look, Finder, clipboard, and default-app access.
+
+Set `LAB_BROWSER_DB_ROOT` before the first launch, or edit
+`~/.lab-browser/settings.json` afterwards to choose the records directory.
