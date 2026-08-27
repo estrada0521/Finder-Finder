@@ -44,6 +44,7 @@ struct RecordEntry {
     id: String,
     title: String,
     payload: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
     kind: String,
 }
