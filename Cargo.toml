@@ -13,6 +13,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "finder-finder-native"
 path = "src/main.rs"
 
+[[bin]]
+name = "generate-csv-previews"
+path = "src/bin/generate_csv_previews.rs"
+
 [build-dependencies]
 cc = "1"
 

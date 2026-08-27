@@ -1,11 +1,21 @@
 #import <Cocoa/Cocoa.h>
 #import <QuickLookUI/QuickLookUI.h>
 
-@interface LabQuickLookDataSource : NSObject <QLPreviewPanelDataSource>
-@property(nonatomic, copy) NSArray<NSURL *> *items;
+@interface FinderQuickLookItem : NSObject <QLPreviewItem>
+@property(nonatomic, copy) NSURL *url;
+@property(nonatomic, copy) NSString *displayName;
 @end
 
-@implementation LabQuickLookDataSource
+@implementation FinderQuickLookItem
+- (NSURL *)previewItemURL { return self.url; }
+- (NSString *)previewItemDisplayName { return self.displayName; }
+@end
+
+@interface FinderQuickLookDataSource : NSObject <QLPreviewPanelDataSource>
+@property(nonatomic, copy) NSArray<FinderQuickLookItem *> *items;
+@end
+
+@implementation FinderQuickLookDataSource
 
 - (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel *)panel {
   return self.items.count;
@@ -18,19 +28,23 @@
 
 @end
 
-static LabQuickLookDataSource *dataSource;
+static FinderQuickLookDataSource *dataSource;
 
-void lab_quicklook_open(const char *const *paths, size_t count) {
+void finder_quicklook_open(const char *const *paths, const char *const *names, size_t count) {
   @autoreleasepool {
-    NSMutableArray<NSURL *> *items = [NSMutableArray arrayWithCapacity:count];
+    NSMutableArray<FinderQuickLookItem *> *items = [NSMutableArray arrayWithCapacity:count];
     for (size_t i = 0; i < count; i++) {
       if (paths[i] == NULL) continue;
       NSString *path = [NSString stringWithUTF8String:paths[i]];
-      if (path != nil) [items addObject:[NSURL fileURLWithPath:path]];
+      if (path == nil) continue;
+      FinderQuickLookItem *item = [FinderQuickLookItem new];
+      item.url = [NSURL fileURLWithPath:path];
+      item.displayName = names && names[i] ? [NSString stringWithUTF8String:names[i]] : path.lastPathComponent;
+      [items addObject:item];
     }
     if (items.count == 0) return;
 
-    if (dataSource == nil) dataSource = [LabQuickLookDataSource new];
+    if (dataSource == nil) dataSource = [FinderQuickLookDataSource new];
     dataSource.items = items;
 
     QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
@@ -41,7 +55,7 @@ void lab_quicklook_open(const char *const *paths, size_t count) {
   }
 }
 
-long lab_quicklook_current_index(void) {
+long finder_quicklook_current_index(void) {
   @autoreleasepool {
     QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
     if (!panel.isVisible || dataSource == nil || dataSource.items.count == 0) return -1;

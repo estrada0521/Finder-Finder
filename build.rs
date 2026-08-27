@@ -5,7 +5,7 @@ fn main() {
         .file("src/quicklook_panel.m")
         .file("src/native_shell.m")
         .flag("-fobjc-arc")
-        .compile("lab_quicklook_panel");
+        .compile("finder_quicklook_panel");
     // Objective-C class references are resolved dynamically, so force dyld to
     // load this framework instead of allowing the linker to dead-strip it.
     println!("cargo:rustc-link-arg=-Wl,-needed_framework,QuickLookUI");

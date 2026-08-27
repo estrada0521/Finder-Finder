@@ -2,13 +2,17 @@ mod settings;
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn lab_quicklook_open(paths: *const *const std::ffi::c_char, count: usize);
-    fn lab_quicklook_current_index() -> std::os::raw::c_long;
+    fn finder_quicklook_open(
+        paths: *const *const std::ffi::c_char,
+        names: *const *const std::ffi::c_char,
+        count: usize,
+    );
+    fn finder_quicklook_current_index() -> std::os::raw::c_long;
 }
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
 use std::io::Write;
@@ -18,10 +22,7 @@ use std::sync::Mutex;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct QlItem {
-    filename: String,
-    record_id: String,
-    kind: String,
-    payload: PathBuf,
+    payloads: Vec<PathBuf>,
 }
 
 static LAST_QL: Mutex<Vec<QlItem>> = Mutex::new(Vec::new());
@@ -43,6 +44,7 @@ struct RecordEntry {
     id: String,
     title: String,
     payload: Option<String>,
+    preview: Option<String>,
     kind: String,
 }
 
@@ -176,6 +178,20 @@ fn output_paths(dir: &Path, meta: &Value) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
+fn preview_path(dir: &Path, meta: &Value) -> Option<PathBuf> {
+    let rel = text(meta.get("preview"));
+    if rel.is_empty() || Path::new(&rel).is_absolute() {
+        return None;
+    }
+    let record = dir.canonicalize().ok()?;
+    let preview = dir.join(rel).canonicalize().ok()?;
+    if preview.is_file() && preview.starts_with(record) {
+        Some(preview)
+    } else {
+        None
+    }
+}
+
 fn entry_for(dir: &Path) -> RecordEntry {
     let id = dir.file_name().unwrap().to_string_lossy().to_string();
     let meta = read_json(&settings::metadata_path(dir));
@@ -185,6 +201,7 @@ fn entry_for(dir: &Path) -> RecordEntry {
         payload: output_paths(dir, &meta)
             .ok()
             .and_then(|paths| paths.first().map(|path| path.to_string_lossy().to_string())),
+        preview: preview_path(dir, &meta).map(|path| path.to_string_lossy().to_string()),
         kind: text(meta.get("category")),
     }
 }
@@ -390,70 +407,45 @@ fn reveal_files(paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
-fn quicklook_files_native(paths: &[PathBuf]) -> Result<(), String> {
-    if paths.is_empty() {
+fn quicklook_files_native(items: &[(PathBuf, String)]) -> Result<(), String> {
+    if items.is_empty() {
         return Ok(());
     }
     #[cfg(target_os = "macos")]
     {
-        let paths = paths
+        let paths = items
             .iter()
-            .filter_map(|path| CString::new(path.as_os_str().as_encoded_bytes()).ok())
+            .filter_map(|(path, _)| CString::new(path.as_os_str().as_encoded_bytes()).ok())
             .collect::<Vec<_>>();
+        let names = items
+            .iter()
+            .filter_map(|(_, name)| CString::new(name.as_str()).ok())
+            .collect::<Vec<_>>();
+        if paths.len() != items.len() || names.len() != items.len() {
+            return Err("failed to encode Quick Look item".to_string());
+        }
         let ptrs = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
+        let name_ptrs = names.iter().map(|name| name.as_ptr()).collect::<Vec<_>>();
         // Called from an AppKit action, hence already on the main thread.
-        unsafe { lab_quicklook_open(ptrs.as_ptr(), ptrs.len()) };
+        unsafe { finder_quicklook_open(ptrs.as_ptr(), name_ptrs.as_ptr(), ptrs.len()) };
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
         Command::new("qlmanage")
             .arg("-p")
-            .args(paths)
+            .args(items.iter().map(|(path, _)| path))
             .spawn()
             .map_err(|err| format!("failed to quick look files: {err}"))?;
         Ok(())
     }
 }
 
-fn stage_named(preview_dir: &Path, stem: &str, src: &Path) -> Result<PathBuf, String> {
-    let ext = src.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-    let dest = preview_dir.join(if ext.is_empty() {
-        stem.to_string()
-    } else {
-        format!("{stem}.{ext}")
-    });
-    if fs::hard_link(src, &dest).is_err() {
-        fs::copy(src, &dest).map_err(|err| format!("failed to stage preview: {err}"))?;
-    }
-    Ok(dest)
-}
-
-fn preview_dir() -> PathBuf {
-    std::env::temp_dir().join("finder-finder-ql")
-}
-
-fn preview_filename_stem(display_name: &str, used: &mut HashSet<String>) -> String {
-    let base: String = display_name
-        .trim()
-        .chars()
-        .map(|ch| if matches!(ch, '/' | ':' | '\\' | '\0') { '_' } else { ch })
-        .collect();
-    let base = if base.is_empty() { "Preview".to_string() } else { base };
-    let mut stem = base.clone();
-    let mut suffix = 2;
-    while !used.insert(stem.clone()) {
-        stem = format!("{base}-{suffix}");
-        suffix += 1;
-    }
-    stem
-}
-
 fn active_ql_item() -> Option<QlItem> {
     let items = LAST_QL.lock().unwrap().clone();
     #[cfg(target_os = "macos")]
     {
-        let index = unsafe { lab_quicklook_current_index() };
+        let index = unsafe { finder_quicklook_current_index() };
         if index >= 0 {
             return items.get(index as usize).cloned();
         }
@@ -461,10 +453,10 @@ fn active_ql_item() -> Option<QlItem> {
     None
 }
 
-fn is_tabular(path: &Path) -> bool {
+fn is_csv(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "csv" | "dat" | "txt"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
 }
 
 fn parse_csv_columns(path: &Path, x_name: &str, y_name: &str) -> Result<(Vec<f64>, Vec<f64>), String> {
@@ -594,10 +586,9 @@ fn draw_preview_text(ctx: &core_graphics::context::CGContext, text: &str, x: f64
 }
 
 fn write_csv_preview(
-    dir: &Path,
+    output: &Path,
     meta: &Value,
     record_id: &str,
-    stem: &str,
     csv: &Path,
 ) -> Result<PathBuf, String> {
     use core_graphics::base::kCGImageAlphaPremultipliedLast;
@@ -745,8 +736,7 @@ fn write_csv_preview(
         let s = row * bpr;
         rgba[row * w * 4..(row + 1) * w * 4].copy_from_slice(&src[s..s + w * 4]);
     }
-    let out = dir.join(format!("{stem}.png"));
-    let file = fs::File::create(&out).map_err(|err| format!("failed to write preview: {err}"))?;
+    let file = fs::File::create(output).map_err(|err| format!("failed to write preview: {err}"))?;
     let mut encoder = png::Encoder::new(file, w as u32, h as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
@@ -754,46 +744,105 @@ fn write_csv_preview(
         .write_header()
         .and_then(|mut writer| writer.write_image_data(&rgba))
         .map_err(|err| format!("failed to encode preview: {err}"))?;
-    Ok(out)
+    Ok(output.to_path_buf())
 }
 
-fn quicklook_payloads(
+fn quicklook_items(
     root: &Path,
     id: &str,
-    preview_dir: &Path,
-    used_stems: &mut HashSet<String>,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<(PathBuf, String, QlItem)>, String> {
     let rec = record_dir(root, id)?;
     let meta = read_json(&settings::metadata_path(&rec));
-    let kind = text(meta.get("category"));
-    let mut out = Vec::new();
-    let mut items = Vec::new();
-    for path in output_paths(&rec, &meta)? {
-        let path = canonical_db_file(path)?;
-        let stem = preview_filename_stem(&display_name(&meta, id), used_stems);
-        let preview = if is_tabular(&path) {
-            match write_csv_preview(preview_dir, &meta, id, &stem, &path) {
-                Ok(preview) => preview,
-                Err(_) => stage_named(preview_dir, &stem, &path)?,
-            }
-        } else {
-            stage_named(preview_dir, &stem, &path)?
-        };
-        let filename = preview
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("")
-            .to_string();
-        items.push(QlItem {
-            filename,
-            record_id: id.to_string(),
-            kind: kind.clone(),
-            payload: path,
-        });
-        out.push(preview);
+    let payloads = output_paths(&rec, &meta)?
+        .into_iter()
+        .map(canonical_db_file)
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(preview) = preview_path(&rec, &meta) {
+        return Ok(vec![(
+            preview,
+            display_name(&meta, id),
+            QlItem { payloads },
+        )]);
     }
-    LAST_QL.lock().unwrap().extend(items);
-    Ok(out)
+    Ok(payloads
+        .into_iter()
+        .map(|payload| {
+            let name = payload
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(id)
+                .to_string();
+            (
+                payload.clone(),
+                name,
+                QlItem { payloads: vec![payload] },
+            )
+        })
+        .collect())
+}
+
+#[derive(Debug, Default)]
+pub struct CsvPreviewReport {
+    pub generated: usize,
+    pub skipped_existing: usize,
+    pub skipped_without_csv: usize,
+    pub failed: usize,
+}
+
+pub fn generate_csv_previews() -> Result<CsvPreviewReport, String> {
+    let root = PathBuf::from(db_root()?);
+    let mut report = CsvPreviewReport::default();
+    for record in all_record_dirs(&root)? {
+        let metadata_path = settings::metadata_path(&record);
+        let metadata_text = match fs::read_to_string(&metadata_path) {
+            Ok(text) => text,
+            Err(_) => {
+                report.failed += 1;
+                continue;
+            }
+        };
+        let mut meta: Value = match serde_json::from_str(&metadata_text) {
+            Ok(meta) => meta,
+            Err(_) => {
+                report.failed += 1;
+                continue;
+            }
+        };
+        if !text(meta.get("preview")).is_empty() || record.join("preview.png").exists() {
+            report.skipped_existing += 1;
+            continue;
+        }
+        let csv = match output_paths(&record, &meta)
+            .ok()
+            .and_then(|paths| paths.into_iter().find(|path| is_csv(path)))
+        {
+            Some(path) => path,
+            None => {
+                report.skipped_without_csv += 1;
+                continue;
+            }
+        };
+        let id = record.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let output = record.join("preview.png");
+        if write_csv_preview(&output, &meta, id, &csv).is_err() {
+            report.failed += 1;
+            continue;
+        }
+        let Some(object) = meta.as_object_mut() else {
+            report.failed += 1;
+            continue;
+        };
+        object.insert("preview".to_string(), Value::String("preview.png".to_string()));
+        let mut serialized = serde_json::to_string_pretty(&meta)
+            .map_err(|err| format!("failed to serialize {}: {err}", metadata_path.display()))?;
+        serialized.push('\n');
+        if fs::write(&metadata_path, serialized).is_err() {
+            report.failed += 1;
+            continue;
+        }
+        report.generated += 1;
+    }
+    Ok(report)
 }
 
 fn record_paths(ids: &[String]) -> Result<Vec<PathBuf>, String> {
@@ -905,31 +954,34 @@ fn native_action(kind: *const c_char, ids: *const c_char, action: &str) {
             "metadata" => open_files(&ids.iter().map(|id| record_metadata_path(&root, id).and_then(canonical_db_file)).collect::<Result<Vec<_>, _>>()?),
             "reveal" => {
                 if let Some(item) = active_ql_item() {
-                    reveal_files(&[item.payload])
+                    reveal_files(&item.payloads)
                 } else {
                     reveal_files(&ids.iter().map(|id| record_metadata_path(&root, id).and_then(canonical_db_file)).collect::<Result<Vec<_>, _>>()?)
                 }
             }
             "open-ql" => {
                 if let Some(item) = active_ql_item() {
-                    open_files(&[item.payload])
+                    open_files(&item.payloads)
                 } else {
                     Ok(())
                 }
             }
             "quicklook" => {
                 LAST_QL.lock().unwrap().clear();
-                let dir = preview_dir();
-                let _ = fs::remove_dir_all(&dir);
-                fs::create_dir_all(&dir).map_err(|err| format!("failed to create preview dir: {err}"))?;
-                let mut used = HashSet::new();
                 let mut paths = Vec::new();
-                for id in &ids { paths.extend(quicklook_payloads(&root, id, &dir, &mut used)?); }
+                let mut items = Vec::new();
+                for id in &ids {
+                    for (path, name, item) in quicklook_items(&root, id)? {
+                        paths.push((path, name));
+                        items.push(item);
+                    }
+                }
+                LAST_QL.lock().unwrap().extend(items);
                 quicklook_files_native(&paths)
             }
             "copy" => {
                 if let Some(item) = active_ql_item() {
-                    copy_paths_to_clipboard(&[item.payload])
+                    copy_paths_to_clipboard(&item.payloads)
                 } else {
                     copy_record_paths(kind, ids)
                 }

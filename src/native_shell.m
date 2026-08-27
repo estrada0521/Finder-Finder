@@ -11,63 +11,63 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
 
-@interface LabNativeTable : NSTableView
+@interface FinderNativeTable : NSTableView
 @property(nonatomic, weak) id owner;
 @property(nonatomic) NSInteger hoveredRow;
 @end
 
-typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBottom, LabResizeEdgeCorner };
+typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResizeEdgeBottom, FinderResizeEdgeCorner };
 
-@interface LabResizeGrip : NSView
-@property(nonatomic) LabResizeEdge edge;
+@interface FinderResizeGrip : NSView
+@property(nonatomic) FinderResizeEdge edge;
 @property(nonatomic) NSPoint startMouse;
 @property(nonatomic) NSRect startFrame;
 @end
 
-@interface LabDragHeader : NSView
+@interface FinderDragHeader : NSView
 @property(nonatomic) NSTextField *titleLabel;
 @property(nonatomic) NSPoint startMouse;
 @property(nonatomic) NSRect startFrame;
 @end
 
-@interface LabRecordCell : NSTableCellView
+@interface FinderRecordCell : NSTableCellView
 @property(nonatomic) NSImageView *thumbnailView;
 @property(nonatomic) NSTextField *titleView;
 @property(nonatomic, copy) NSString *thumbnailPayload;
 @property(nonatomic) QLThumbnailGenerationRequest *thumbnailRequest;
 @end
 
-@interface LabThumbnailManager : NSObject
+@interface FinderThumbnailManager : NSObject
 @property(nonatomic) NSCache<NSString *, NSImage *> *cache;
 + (instancetype)shared;
-- (void)loadPayload:(NSString *)payload intoCell:(LabRecordCell *)cell scale:(CGFloat)scale;
+- (void)loadPayload:(NSString *)payload intoCell:(FinderRecordCell *)cell scale:(CGFloat)scale;
 @end
 
-@interface LabRelatedController : NSObject <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@interface FinderRelatedController : NSObject <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic) NSWindow *window;
 @property(nonatomic) NSTableView *table;
 @property(nonatomic) NSScrollView *scroll;
-@property(nonatomic) LabDragHeader *header;
+@property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSArray *items;
 @end
 
-@interface LabRelatedTable : NSTableView
-@property(nonatomic, weak) LabRelatedController *owner;
+@interface FinderRelatedTable : NSTableView
+@property(nonatomic, weak) FinderRelatedController *owner;
 @end
 
-@interface LabNativeController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
+@interface FinderNativeController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic) NSWindow *window;
-@property(nonatomic) LabNativeTable *table;
+@property(nonatomic) FinderNativeTable *table;
 @property(nonatomic) NSScrollView *scroll;
 @property(nonatomic) NSArray *columns;
 @property(nonatomic) NSArray *records;
 @property(nonatomic) NSString *activeKind;
-@property(nonatomic) LabDragHeader *header;
+@property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSMutableArray *relatedControllers;
 - (void)setupMainWindow;
 @end
 
-@implementation LabNativeTable
+@implementation FinderNativeTable
 - (void)mouseDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags;
   BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
@@ -75,12 +75,12 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSInteger clickedRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
   BOOL wasSelected = clickedRow >= 0 && [self.selectedRowIndexes containsIndex:(NSUInteger)clickedRow];
   if (openOriginal && wasSelected) {
-    [(LabNativeController *)self.owner performSelector:@selector(open:) withObject:nil];
+    [(FinderNativeController *)self.owner performSelector:@selector(open:) withObject:nil];
     return;
   }
   [super mouseDown:event];
   if (self.selectedRow < 0) return;
-  LabNativeController *controller = (LabNativeController *)self.owner;
+  FinderNativeController *controller = (FinderNativeController *)self.owner;
   if (openOriginal) [controller performSelector:@selector(open:) withObject:nil];
   else if (!extendSelection && wasSelected) [controller performSelector:@selector(quickLook:) withObject:nil];
 }
@@ -91,10 +91,10 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 - (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
 @end
 
-@implementation LabResizeGrip
+@implementation FinderResizeGrip
 - (void)resetCursorRects {
-  if (self.edge == LabResizeEdgeRight) [self addCursorRect:self.bounds cursor:NSCursor.resizeLeftRightCursor];
-  else if (self.edge == LabResizeEdgeBottom) [self addCursorRect:self.bounds cursor:NSCursor.resizeUpDownCursor];
+  if (self.edge == FinderResizeEdgeRight) [self addCursorRect:self.bounds cursor:NSCursor.resizeLeftRightCursor];
+  else if (self.edge == FinderResizeEdgeBottom) [self addCursorRect:self.bounds cursor:NSCursor.resizeUpDownCursor];
   else [self addCursorRect:self.bounds cursor:NSCursor.crosshairCursor];
 }
 - (void)mouseDown:(NSEvent *)event { self.startMouse = NSEvent.mouseLocation; self.startFrame = self.window.frame; }
@@ -102,8 +102,8 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSPoint now = NSEvent.mouseLocation;
   CGFloat dx = now.x - self.startMouse.x, dy = now.y - self.startMouse.y;
   NSRect frame = self.startFrame;
-  if (self.edge == LabResizeEdgeRight || self.edge == LabResizeEdgeCorner) frame.size.width = MAX(self.window.minSize.width, frame.size.width + dx);
-  if (self.edge == LabResizeEdgeBottom || self.edge == LabResizeEdgeCorner) {
+  if (self.edge == FinderResizeEdgeRight || self.edge == FinderResizeEdgeCorner) frame.size.width = MAX(self.window.minSize.width, frame.size.width + dx);
+  if (self.edge == FinderResizeEdgeBottom || self.edge == FinderResizeEdgeCorner) {
     CGFloat height = MAX(self.window.minSize.height, self.startFrame.size.height - dy);
     frame.origin.y = self.startFrame.origin.y + self.startFrame.size.height - height;
     frame.size.height = height;
@@ -112,7 +112,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabDragHeader
+@implementation FinderDragHeader
 - (instancetype)initWithFrame:(NSRect)frameRect {
   if (!(self = [super initWithFrame:frameRect])) return nil;
   self.titleLabel = [NSTextField labelWithString:@""];
@@ -140,7 +140,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabRecordCell
+@implementation FinderRecordCell
 - (instancetype)initWithFrame:(NSRect)frameRect {
   if (!(self = [super initWithFrame:frameRect])) return nil;
   self.thumbnailView = [[NSImageView alloc] initWithFrame:NSZeroRect];
@@ -172,10 +172,10 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabThumbnailManager
+@implementation FinderThumbnailManager
 + (instancetype)shared {
-  static LabThumbnailManager *manager; static dispatch_once_t once;
-  dispatch_once(&once, ^{ manager = [LabThumbnailManager new]; manager.cache = [NSCache new]; manager.cache.countLimit = 512; });
+  static FinderThumbnailManager *manager; static dispatch_once_t once;
+  dispatch_once(&once, ^{ manager = [FinderThumbnailManager new]; manager.cache = [NSCache new]; manager.cache.countLimit = 512; });
   return manager;
 }
 - (NSString *)cacheKeyForPayload:(NSString *)payload {
@@ -184,7 +184,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSNumber *size = attrs[NSFileSize] ?: @0;
   return [NSString stringWithFormat:@"%@|%.6f|%@", payload, modified.timeIntervalSince1970, size];
 }
-- (void)loadPayload:(NSString *)payload intoCell:(LabRecordCell *)cell scale:(CGFloat)scale {
+- (void)loadPayload:(NSString *)payload intoCell:(FinderRecordCell *)cell scale:(CGFloat)scale {
   [[QLThumbnailGenerator sharedGenerator] cancelRequest:cell.thumbnailRequest]; cell.thumbnailRequest = nil;
   cell.thumbnailPayload = payload;
   cell.thumbnailView.image = [[NSWorkspace sharedWorkspace] iconForFile:payload];
@@ -195,13 +195,13 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   QLThumbnailGenerationRequest *request = [[QLThumbnailGenerationRequest alloc] initWithFileAtURL:[NSURL fileURLWithPath:payload] size:CGSizeMake(30, 30) scale:MAX(scale, 1.0) representationTypes:QLThumbnailGenerationRequestRepresentationTypeThumbnail];
   request.iconMode = NO;
   cell.thumbnailRequest = request;
-  __weak LabRecordCell *weakCell = cell;
+  __weak FinderRecordCell *weakCell = cell;
   [[QLThumbnailGenerator sharedGenerator] generateBestRepresentationForRequest:request completionHandler:^(QLThumbnailRepresentation *thumbnail, NSError *error) {
     if (!thumbnail.NSImage || error) return;
     NSImage *image = thumbnail.NSImage;
     [self.cache setObject:image forKey:key];
     dispatch_async(dispatch_get_main_queue(), ^{
-      LabRecordCell *currentCell = weakCell;
+      FinderRecordCell *currentCell = weakCell;
       if (currentCell && currentCell.thumbnailRequest == request && [currentCell.thumbnailPayload isEqualToString:payload]) {
         currentCell.thumbnailView.image = image;
         currentCell.thumbnailRequest = nil;
@@ -211,7 +211,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabRelatedController
+@implementation FinderRelatedController
 - (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent {
   if (!(self = [super init])) return nil;
   NSMutableArray *items = [NSMutableArray array];
@@ -225,21 +225,21 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   self.window.delegate = self;
   self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.backgroundColor = NSColor.windowBackgroundColor; self.window.minSize = NSMakeSize(180, 140);
   NSView *content = self.window.contentView;
-  self.header = [[LabDragHeader alloc] initWithFrame:NSMakeRect(0, 336, 300, 24)];
+  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 336, 300, 24)];
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   self.header.titleLabel.stringValue = [NSString stringWithFormat:@"Links · %@", catalog[@"title"] ?: @""];
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 336)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; self.scroll.hasVerticalScroller = YES; self.scroll.borderType = NSNoBorder;
-  self.table = [[LabRelatedTable alloc] initWithFrame:self.scroll.bounds];
-  ((LabRelatedTable *)self.table).owner = self; self.table.headerView = nil; self.table.allowsMultipleSelection = YES; self.table.allowsEmptySelection = YES;
+  self.table = [[FinderRelatedTable alloc] initWithFrame:self.scroll.bounds];
+  ((FinderRelatedTable *)self.table).owner = self; self.table.headerView = nil; self.table.allowsMultipleSelection = YES; self.table.allowsEmptySelection = YES;
   self.table.usesAlternatingRowBackgroundColors = NO; self.table.backgroundColor = NSColor.clearColor; self.table.rowHeight = 34; self.table.intercellSpacing = NSMakeSize(0, 0);
   self.table.autoresizingMask = NSViewWidthSizable; self.table.columnAutoresizingStyle = NSTableViewFirstColumnOnlyAutoresizingStyle; self.table.delegate = self; self.table.dataSource = self;
   NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"related"]; column.width = 300; column.resizingMask = NSTableColumnAutoresizingMask; [self.table addTableColumn:column]; self.scroll.documentView = self.table; [content addSubview:self.scroll];
-  for (NSNumber *edge in @[@(LabResizeEdgeRight), @(LabResizeEdgeBottom), @(LabResizeEdgeCorner)]) {
-    LabResizeGrip *grip = [[LabResizeGrip alloc] initWithFrame:NSZeroRect]; grip.edge = edge.integerValue;
-    if (grip.edge == LabResizeEdgeRight) { grip.frame = NSMakeRect(294, 0, 6, 360); grip.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable; }
-    else if (grip.edge == LabResizeEdgeBottom) { grip.frame = NSMakeRect(0, 0, 300, 6); grip.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin; }
+  for (NSNumber *edge in @[@(FinderResizeEdgeRight), @(FinderResizeEdgeBottom), @(FinderResizeEdgeCorner)]) {
+    FinderResizeGrip *grip = [[FinderResizeGrip alloc] initWithFrame:NSZeroRect]; grip.edge = edge.integerValue;
+    if (grip.edge == FinderResizeEdgeRight) { grip.frame = NSMakeRect(294, 0, 6, 360); grip.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable; }
+    else if (grip.edge == FinderResizeEdgeBottom) { grip.frame = NSMakeRect(0, 0, 300, 6); grip.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin; }
     else { grip.frame = NSMakeRect(290, 0, 10, 10); grip.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin; }
     [content addSubview:grip];
   }
@@ -247,12 +247,12 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.items.count; }
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
-  LabRecordCell *cell = [table makeViewWithIdentifier:@"related-cell" owner:self];
-  if (!cell) { cell = [[LabRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"related-cell"; }
+  FinderRecordCell *cell = [table makeViewWithIdentifier:@"related-cell" owner:self];
+  if (!cell) { cell = [[FinderRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"related-cell"; }
   NSDictionary *item = self.items[(NSUInteger)row];
   cell.titleView.stringValue = [NSString stringWithFormat:@"%@  %@", item[@"label"], item[@"title"]];
   [cell setNeedsLayout:YES];
-  [[LabThumbnailManager shared] loadPayload:item[@"payload"] intoCell:cell scale:self.window.backingScaleFactor ?: 1.0];
+  [[FinderThumbnailManager shared] loadPayload:item[@"preview"] ?: item[@"payload"] intoCell:cell scale:self.window.backingScaleFactor ?: 1.0];
   return cell;
 }
 - (void)openSelected {
@@ -297,7 +297,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabRelatedTable
+@implementation FinderRelatedTable
 - (void)mouseDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags;
   NSInteger clickedRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
@@ -310,7 +310,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-@implementation LabNativeController
+@implementation FinderNativeController
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
 
@@ -325,14 +325,14 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   [self.window center];
   NSView *content = self.window.contentView;
 
-  self.header = [[LabDragHeader alloc] initWithFrame:NSMakeRect(0, 396, 300, 24)];
+  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 396, 300, 24)];
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 396)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.scroll.hasVerticalScroller = YES;
   self.scroll.borderType = NSNoBorder;
-  self.table = [[LabNativeTable alloc] initWithFrame:self.scroll.bounds];
+  self.table = [[FinderNativeTable alloc] initWithFrame:self.scroll.bounds];
   self.table.owner = self;
   self.table.hoveredRow = -1;
   self.relatedControllers = [NSMutableArray array];
@@ -349,11 +349,11 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"record"];
   column.width = 300; column.resizingMask = NSTableColumnAutoresizingMask; [self.table addTableColumn:column];
   self.scroll.documentView = self.table; [content addSubview:self.scroll];
-  for (NSNumber *edge in @[@(LabResizeEdgeRight), @(LabResizeEdgeBottom), @(LabResizeEdgeCorner)]) {
-    LabResizeGrip *grip = [[LabResizeGrip alloc] initWithFrame:NSZeroRect];
+  for (NSNumber *edge in @[@(FinderResizeEdgeRight), @(FinderResizeEdgeBottom), @(FinderResizeEdgeCorner)]) {
+    FinderResizeGrip *grip = [[FinderResizeGrip alloc] initWithFrame:NSZeroRect];
     grip.edge = edge.integerValue;
-    if (grip.edge == LabResizeEdgeRight) { grip.frame = NSMakeRect(294, 0, 6, 420); grip.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable; }
-    else if (grip.edge == LabResizeEdgeBottom) { grip.frame = NSMakeRect(0, 0, 300, 6); grip.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin; }
+    if (grip.edge == FinderResizeEdgeRight) { grip.frame = NSMakeRect(294, 0, 6, 420); grip.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable; }
+    else if (grip.edge == FinderResizeEdgeBottom) { grip.frame = NSMakeRect(0, 0, 300, 6); grip.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin; }
     else { grip.frame = NSMakeRect(290, 0, 10, 10); grip.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin; }
     [content addSubview:grip];
   }
@@ -434,13 +434,13 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count; }
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
-  LabRecordCell *cell = [table makeViewWithIdentifier:@"record-cell" owner:self];
-  if (!cell) { cell = [[LabRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"record-cell"; }
+  FinderRecordCell *cell = [table makeViewWithIdentifier:@"record-cell" owner:self];
+  if (!cell) { cell = [[FinderRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"record-cell"; }
   NSDictionary *record = self.records[(NSUInteger)row];
   cell.titleView.stringValue = record[@"title"] ?: record[@"id"] ?: @"";
   [cell setNeedsLayout:YES];
   CGFloat scale = self.window.backingScaleFactor ?: 1.0;
-  [[LabThumbnailManager shared] loadPayload:record[@"payload"] ?: @"" intoCell:cell scale:scale];
+  [[FinderThumbnailManager shared] loadPayload:record[@"preview"] ?: record[@"payload"] ?: @"" intoCell:cell scale:scale];
   return cell;
 }
 - (NSArray<NSString *> *)selectedIds {
@@ -492,7 +492,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSDictionary *record = self.records[(NSUInteger)row]; char *raw = finder_native_related_json(self.kind.UTF8String, [record[@"id"] UTF8String]);
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
-  LabRelatedController *controller = [[LabRelatedController alloc] initWithCatalog:catalog parent:self.window]; [self.relatedControllers addObject:controller];
+  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:self.window]; [self.relatedControllers addObject:controller];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
   if (item.action == @selector(openRelated:)) {
@@ -506,7 +506,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 void finder_native_run(void) {
   @autoreleasepool {
     NSApplication *app = [NSApplication sharedApplication];
-    LabNativeController *controller = [LabNativeController new];
+    FinderNativeController *controller = [FinderNativeController new];
     app.delegate = controller;
     [app run];
   }

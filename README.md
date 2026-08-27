@@ -8,3 +8,15 @@ then provides direct Quick Look, Finder, clipboard, and default-app access.
 
 Set `FINDER_FINDER_DB_ROOT` before the first launch, or edit
 `~/.finder-finder/settings.json` afterwards to choose the records directory.
+
+## Previews
+
+Records may optionally declare a record-local visual derivative:
+
+```json
+"preview": "preview.png"
+```
+
+Finder Finder uses it for the row thumbnail and Quick Look display only. Open,
+Finder reveal, and path copy actions always target `payload`. Generate previews
+for existing CSV payloads with `cargo run --bin generate-csv-previews`.
