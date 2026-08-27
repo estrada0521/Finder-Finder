@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.lab-browser/cache/native-target}"
+OPEN_APP=1
+DEV=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dev) DEV=1 ;;
+    --no-open) OPEN_APP=0 ;;
+    --help|-h)
+      echo 'Usage: ./native_start [--dev] [--no-open]'
+      echo '  --dev: cargo run; Rust/Objective-C changes compile incrementally.'
+      exit 0 ;;
+    *) echo "native_start: unknown option: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+
+export CARGO_TARGET_DIR="$TARGET_DIR"
+cd "$ROOT"
+if (( DEV )); then
+  exec cargo run --bin lab-browser-native
+fi
+
+cargo build --release --bin lab-browser-native
+APP="$TARGET_DIR/release/Lab Browser.app"
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS"
+cp Info.plist "$APP/Contents/Info.plist"
+cp "$TARGET_DIR/release/lab-browser-native" "$APP/Contents/MacOS/lab-browser-native"
+
+INSTALLED="/Applications/Lab Browser.app"
+rm -rf "$INSTALLED"
+mv "$APP" "$INSTALLED"
+echo "native_start: installed app at $INSTALLED"
+if (( OPEN_APP )); then open "$INSTALLED"; fi

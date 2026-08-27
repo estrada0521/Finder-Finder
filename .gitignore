@@ -1,0 +1,9 @@
+.DS_Store
+.agent-window/
+node_modules/
+.pnpm-store/
+dist/
+build/
+target/
+.env
+.env.*
