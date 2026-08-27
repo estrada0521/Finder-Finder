@@ -1,11 +1,11 @@
 #import <Cocoa/Cocoa.h>
 #import <QuickLookThumbnailing/QuickLookThumbnailing.h>
 
-extern char *lab_native_catalog_json(void);
-extern char *lab_native_related_json(const char *kind, const char *id);
-extern void lab_native_free_string(char *value);
-extern void lab_native_action(const char *kind, const char *ids, const char *action);
-extern bool lab_native_rename(const char *kind, const char *id, const char *name);
+extern char *finder_native_catalog_json(void);
+extern char *finder_native_related_json(const char *kind, const char *id);
+extern void finder_native_free_string(char *value);
+extern void finder_native_action(const char *kind, const char *ids, const char *action);
+extern bool finder_native_rename(const char *kind, const char *id, const char *name);
 
 // NSMenu key-equivalent handling can temporarily clear NSApp.keyWindow. Keep
 // the last key window strongly until its close action finishes.
@@ -279,7 +279,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   }];
   NSData *data = [NSJSONSerialization dataWithJSONObject:ids options:0 error:nil];
   NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-  if (kind && json) lab_native_action(kind.UTF8String, json.UTF8String, "quicklook");
+  if (kind && json) finder_native_action(kind.UTF8String, json.UTF8String, "quicklook");
 }
 - (void)actOnSelected:(NSString *)action {
   if (self.table.selectedRow < 0) return;
@@ -292,7 +292,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   for (NSString *kind in idsByKind) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:idsByKind[kind] options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    lab_native_action(kind.UTF8String, json.UTF8String, action.UTF8String);
+    finder_native_action(kind.UTF8String, json.UTF8String, action.UTF8String);
   }
 }
 @end
@@ -366,8 +366,8 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 - (void)installMenu {
   NSMenu *bar = [NSMenu new];
   NSMenuItem *appItem = [NSMenuItem new]; [bar addItem:appItem];
-  NSMenu *app = [[NSMenu alloc] initWithTitle:@"Lab Browser"];
-  [app addItemWithTitle:@"Quit Lab Browser" action:@selector(terminate:) keyEquivalent:@"q"];
+  NSMenu *app = [[NSMenu alloc] initWithTitle:@"Finder Finder"];
+  [app addItemWithTitle:@"Quit Finder Finder" action:@selector(terminate:) keyEquivalent:@"q"];
   appItem.submenu = app;
   NSMenuItem *fileItem = [NSMenuItem new]; [bar addItem:fileItem];
   NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
@@ -408,9 +408,9 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 
 - (void)loadCatalog {
-  char *raw = lab_native_catalog_json();
+  char *raw = finder_native_catalog_json();
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
-  if (raw) lab_native_free_string(raw);
+  if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
   self.columns = catalog[@"columns"] ?: @[];
   if (self.columns.count) [self chooseColumn:0]; else { self.records = @[]; [self.table reloadData]; }
@@ -453,7 +453,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSArray *ids = self.selectedIds; if (!ids.count && ![action isEqual:@"reveal"] && ![action isEqual:@"copy"]) return;
   NSData *data = [NSJSONSerialization dataWithJSONObject:ids options:0 error:nil];
   NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
-  lab_native_action(self.kind.UTF8String, json.UTF8String, action.UTF8String);
+  finder_native_action(self.kind.UTF8String, json.UTF8String, action.UTF8String);
 }
 - (void)tableView:(NSTableView *)tableView didDoubleClickRow:(NSInteger)row { [self act:@"open"]; }
 - (void)quickLook:(id)sender { [self act:@"quicklook"]; }
@@ -461,7 +461,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 - (void)metadata:(id)sender { [self act:@"metadata"]; }
 - (void)reveal:(id)sender { [self act:@"reveal"]; }
 - (void)copy:(id)sender { [self act:@"copy"]; }
-- (void)openQuickLookOriginal:(id)sender { lab_native_action(self.kind.UTF8String, "[]", "open-ql"); }
+- (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
 - (void)closeWindow:(id)sender {
   NSWindow *window = NSApp.orderedWindows.firstObject ?: lastKeyWindow ?: self.window;
   lastKeyWindow = nil;
@@ -474,7 +474,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)]; field.stringValue = record[@"title"] ?: record[@"id"] ?: @""; alert.accessoryView = field;
   [alert addButtonWithTitle:@"Rename"]; [alert addButtonWithTitle:@"Cancel"];
   if ([alert runModal] != NSAlertFirstButtonReturn) return;
-  if (lab_native_rename(self.kind.UTF8String, [record[@"id"] UTF8String], field.stringValue.UTF8String)) [self loadCatalog];
+  if (finder_native_rename(self.kind.UTF8String, [record[@"id"] UTF8String], field.stringValue.UTF8String)) [self loadCatalog];
 }
 - (void)windowDidBecomeKey:(NSNotification *)notification { lastKeyWindow = self.window; }
 - (void)windowDidResize:(NSNotification *)notification {
@@ -489,8 +489,8 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
   if (NSApp.orderedWindows.firstObject != self.window) return;
   NSInteger row = self.table.selectedRow >= 0 ? self.table.selectedRow : self.table.hoveredRow;
   if (row < 0 || row >= (NSInteger)self.records.count) return;
-  NSDictionary *record = self.records[(NSUInteger)row]; char *raw = lab_native_related_json(self.kind.UTF8String, [record[@"id"] UTF8String]);
-  NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) lab_native_free_string(raw);
+  NSDictionary *record = self.records[(NSUInteger)row]; char *raw = finder_native_related_json(self.kind.UTF8String, [record[@"id"] UTF8String]);
+  NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
   LabRelatedController *controller = [[LabRelatedController alloc] initWithCatalog:catalog parent:self.window]; [self.relatedControllers addObject:controller];
 }
@@ -503,7 +503,7 @@ typedef NS_ENUM(NSInteger, LabResizeEdge) { LabResizeEdgeRight, LabResizeEdgeBot
 }
 @end
 
-void lab_native_run(void) {
+void finder_native_run(void) {
   @autoreleasepool {
     NSApplication *app = [NSApplication sharedApplication];
     LabNativeController *controller = [LabNativeController new];

@@ -107,6 +107,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "finder-finder"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "core-foundation",
+ "core-graphics",
+ "foreign-types",
+ "png",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -164,19 +177,6 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
-
-[[package]]
-name = "lab-browser"
-version = "0.1.0"
-dependencies = [
- "cc",
- "core-foundation",
- "core-graphics",
- "foreign-types",
- "png",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "libc"

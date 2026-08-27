@@ -1,16 +1,16 @@
 [package]
-name = "lab-browser"
+name = "finder-finder"
 version = "0.1.0"
-description = "Native macOS browser for linked local records"
+description = "Finder to find Finder"
 edition = "2021"
-default-run = "lab-browser-native"
+default-run = "finder-finder-native"
 
 [lib]
-name = "lab_browser_lib"
+name = "finder_finder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "lab-browser-native"
+name = "finder-finder-native"
 path = "src/main.rs"
 
 [build-dependencies]

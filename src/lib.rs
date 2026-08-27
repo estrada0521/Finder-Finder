@@ -430,7 +430,7 @@ fn stage_named(preview_dir: &Path, stem: &str, src: &Path) -> Result<PathBuf, St
 }
 
 fn preview_dir() -> PathBuf {
-    std::env::temp_dir().join("lab-browser-ql")
+    std::env::temp_dir().join("finder-finder-ql")
 }
 
 fn preview_filename_stem(display_name: &str, used: &mut HashSet<String>) -> String {
@@ -845,7 +845,7 @@ fn native_ids(raw: *const c_char) -> Vec<String> {
 }
 
 #[no_mangle]
-pub extern "C" fn lab_native_catalog_json() -> *mut c_char {
+pub extern "C" fn finder_native_catalog_json() -> *mut c_char {
     let text = list_catalog()
         .and_then(|catalog| serde_json::to_string(&catalog).map_err(|err| err.to_string()))
         .unwrap_or_else(|err| serde_json::json!({ "error": err }).to_string());
@@ -853,7 +853,7 @@ pub extern "C" fn lab_native_catalog_json() -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn lab_native_related_json(kind: *const c_char, id: *const c_char) -> *mut c_char {
+pub extern "C" fn finder_native_related_json(kind: *const c_char, id: *const c_char) -> *mut c_char {
     let result = (|| -> Result<String, String> {
         if kind.is_null() || id.is_null() { return Err("missing related record".to_string()); }
         let kind = unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned();
@@ -865,7 +865,7 @@ pub extern "C" fn lab_native_related_json(kind: *const c_char, id: *const c_char
 }
 
 #[no_mangle]
-pub extern "C" fn lab_native_rename(kind: *const c_char, id: *const c_char, name: *const c_char) -> bool {
+pub extern "C" fn finder_native_rename(kind: *const c_char, id: *const c_char, name: *const c_char) -> bool {
     let result = (|| -> Result<(), String> {
         if kind.is_null() || id.is_null() || name.is_null() { return Err("missing rename value".to_string()); }
         let kind = unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned();
@@ -880,11 +880,11 @@ pub extern "C" fn lab_native_rename(kind: *const c_char, id: *const c_char, name
         let mut out = serde_json::to_string_pretty(&value).map_err(|err| format!("serialize failed: {err}"))?;
         out.push('\n'); fs::write(path, out).map_err(|err| format!("failed to write metadata: {err}"))
     })();
-    if let Err(err) = result { eprintln!("[lab-browser-native] rename: {err}"); false } else { true }
+    if let Err(err) = result { eprintln!("[finder-finder-native] rename: {err}"); false } else { true }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn lab_native_free_string(value: *mut c_char) {
+pub unsafe extern "C" fn finder_native_free_string(value: *mut c_char) {
     if !value.is_null() {
         drop(CString::from_raw(value));
     }
@@ -937,11 +937,11 @@ fn native_action(kind: *const c_char, ids: *const c_char, action: &str) {
             _ => Ok(()),
         }
     })();
-    if let Err(err) = result { eprintln!("[lab-browser-native] {err}"); }
+    if let Err(err) = result { eprintln!("[finder-finder-native] {err}"); }
 }
 
 #[no_mangle]
-pub extern "C" fn lab_native_action(kind: *const c_char, ids: *const c_char, action: *const c_char) {
+pub extern "C" fn finder_native_action(kind: *const c_char, ids: *const c_char, action: *const c_char) {
     if action.is_null() { return; }
     let action = unsafe { CStr::from_ptr(action) }.to_string_lossy();
     native_action(kind, ids, &action);

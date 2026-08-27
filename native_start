@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.lab-browser/cache/native-target}"
+TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.finder-finder/cache/native-target}"
 OPEN_APP=1
 DEV=0
 
@@ -22,17 +22,17 @@ done
 export CARGO_TARGET_DIR="$TARGET_DIR"
 cd "$ROOT"
 if (( DEV )); then
-  exec cargo run --bin lab-browser-native
+  exec cargo run --bin finder-finder-native
 fi
 
-cargo build --release --bin lab-browser-native
-APP="$TARGET_DIR/release/Lab Browser.app"
+cargo build --release --bin finder-finder-native
+APP="$TARGET_DIR/release/Finder Finder.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp Info.plist "$APP/Contents/Info.plist"
-cp "$TARGET_DIR/release/lab-browser-native" "$APP/Contents/MacOS/lab-browser-native"
+cp "$TARGET_DIR/release/finder-finder-native" "$APP/Contents/MacOS/finder-finder-native"
 
-INSTALLED="/Applications/Lab Browser.app"
+INSTALLED="/Applications/Finder Finder.app"
 rm -rf "$INSTALLED"
 mv "$APP" "$INSTALLED"
 echo "native_start: installed app at $INSTALLED"

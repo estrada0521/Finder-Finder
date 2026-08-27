@@ -13,7 +13,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            db_root: std::env::var("LAB_BROWSER_DB_ROOT").unwrap_or_else(|_| {
+            db_root: std::env::var("FINDER_FINDER_DB_ROOT").unwrap_or_else(|_| {
                 PathBuf::from(std::env::var("HOME").unwrap_or_default())
                     .join("Documents/Records")
                     .to_string_lossy()
@@ -26,7 +26,7 @@ impl Default for AppSettings {
 static CACHE: RwLock<Option<AppSettings>> = RwLock::new(None);
 
 pub fn config_dir() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".lab-browser")
+    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".finder-finder")
 }
 
 pub fn settings_path() -> PathBuf {

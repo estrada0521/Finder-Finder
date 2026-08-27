@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleExecutable</key><string>lab-browser-native</string>
-  <key>CFBundleIdentifier</key><string>com.okadaharuto.labbrowser</string>
-  <key>CFBundleName</key><string>Lab Browser</string>
+  <key>CFBundleExecutable</key><string>finder-finder-native</string>
+  <key>CFBundleIdentifier</key><string>com.okadaharuto.finderfinder</string>
+  <key>CFBundleName</key><string>Finder Finder</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>

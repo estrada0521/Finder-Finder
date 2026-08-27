@@ -1,9 +1,9 @@
-use lab_browser_lib as _;
+use finder_finder_lib as _;
 
 extern "C" {
-    fn lab_native_run();
+    fn finder_native_run();
 }
 
 fn main() {
-    unsafe { lab_native_run() }
+    unsafe { finder_native_run() }
 }
