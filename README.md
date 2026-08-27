@@ -18,5 +18,5 @@ Records may optionally declare a record-local visual derivative:
 ```
 
 Finder Finder uses it for the row thumbnail and Quick Look display only. Open,
-Finder reveal, and path copy actions always target `payload`. Generate previews
-for existing CSV payloads with `cargo run --bin generate-csv-previews`.
+Finder reveal, and path copy actions always target `payload`. The preview can be
+any Quick Look-compatible file produced alongside the record.

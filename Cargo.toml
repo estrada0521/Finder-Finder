@@ -13,17 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "finder-finder-native"
 path = "src/main.rs"
 
-[[bin]]
-name = "generate-csv-previews"
-path = "src/bin/generate_csv_previews.rs"
-
 [build-dependencies]
 cc = "1"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-core-foundation = "0.10"
-core-graphics = "0.25"
-png = "0.17"
-foreign-types = "0.5"
