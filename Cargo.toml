@@ -1,7 +1,7 @@
 [package]
 name = "lab-browser"
 version = "0.1.0"
-description = "DB-aware companion app for Raw-Plot"
+description = "Native macOS browser for linked local records"
 edition = "2021"
 default-run = "lab-browser-native"
 
