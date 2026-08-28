@@ -11,24 +11,31 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
 
+static NSWindowStyleMask FinderWindowStyle(void) {
+  return NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView;
+}
+
+static void FinderConfigureWindow(NSWindow *window) {
+  window.titlebarAppearsTransparent = YES;
+  window.titleVisibility = NSWindowTitleHidden;
+  [window standardWindowButton:NSWindowCloseButton].hidden = YES;
+  [window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
+  [window standardWindowButton:NSWindowZoomButton].hidden = YES;
+}
+
 static NSView *FinderWindowContent(NSWindow *window) {
-  NSView *root = window.contentView;
+  NSView *root = [[NSView alloc] initWithFrame:window.contentView.bounds];
+  root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  window.contentView = root;
   if (@available(macOS 26.0, *)) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    glass.style = NSGlassEffectViewStyleRegular;
+    glass.style = NSGlassEffectViewStyleClear;
     glass.cornerRadius = 28;
-    glass.wantsLayer = YES;
-    glass.layer.cornerRadius = 28;
-    glass.layer.borderWidth = 1.0 / NSScreen.mainScreen.backingScaleFactor;
-    glass.layer.borderColor = NSColor.separatorColor.CGColor;
-    NSView *content = [[NSView alloc] initWithFrame:glass.bounds];
-    content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    glass.contentView = content;
-    [root addSubview:glass];
+    [root addSubview:glass positioned:NSWindowBelow relativeTo:nil];
     window.backgroundColor = NSColor.clearColor;
     window.opaque = NO;
-    return content;
+    return root;
   }
   window.backgroundColor = NSColor.windowBackgroundColor;
   window.opaque = YES;
@@ -248,7 +255,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     }
   }
   self.items = items;
-  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+  self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
+  FinderConfigureWindow(self.window);
   self.window.delegate = self;
   self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.minSize = NSMakeSize(180, 140);
   NSView *content = FinderWindowContent(self.window);
@@ -345,7 +353,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 
 - (void)setupMainWindow {
   NSRect frame = NSMakeRect(0, 0, 300, 420);
-  self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+  self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
+  FinderConfigureWindow(self.window);
   self.window.movableByWindowBackground = YES;
   self.window.delegate = self;
   self.window.hasShadow = NO;
