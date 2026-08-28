@@ -17,7 +17,6 @@ static NSView *FinderWindowContent(NSWindow *window) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     glass.style = NSGlassEffectViewStyleRegular;
-    glass.cornerRadius = 0;
     NSView *content = [[NSView alloc] initWithFrame:glass.bounds];
     content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     glass.contentView = content;
