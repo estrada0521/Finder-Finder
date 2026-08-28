@@ -11,6 +11,26 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
 
+static NSView *FinderWindowContent(NSWindow *window) {
+  NSView *root = window.contentView;
+  if (@available(macOS 26.0, *)) {
+    NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
+    glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    glass.style = NSGlassEffectViewStyleRegular;
+    glass.cornerRadius = 0;
+    NSView *content = [[NSView alloc] initWithFrame:glass.bounds];
+    content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    glass.contentView = content;
+    [root addSubview:glass];
+    window.backgroundColor = NSColor.clearColor;
+    window.opaque = NO;
+    return content;
+  }
+  window.backgroundColor = NSColor.windowBackgroundColor;
+  window.opaque = YES;
+  return root;
+}
+
 @interface FinderNativeTable : NSTableView
 @property(nonatomic, weak) id owner;
 @property(nonatomic) NSInteger hoveredRow;
@@ -28,6 +48,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSTextField *titleLabel;
 @property(nonatomic) NSPoint startMouse;
 @property(nonatomic) NSRect startFrame;
+@property(nonatomic) BOOL usesLiquidGlass;
 @end
 
 @interface FinderRecordCell : NSTableCellView
@@ -125,8 +146,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (void)drawRect:(NSRect)dirtyRect {
   [super drawRect:dirtyRect];
-  [NSColor.controlBackgroundColor setFill];
-  NSRectFill(self.bounds);
+  if (!self.usesLiquidGlass) {
+    [NSColor.controlBackgroundColor setFill];
+    NSRectFill(self.bounds);
+  }
   [NSColor.separatorColor setFill];
   NSRectFill(NSMakeRect(0, 0, self.bounds.size.width, 1));
 }
@@ -223,14 +246,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.items = items;
   self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
   self.window.delegate = self;
-  self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.backgroundColor = NSColor.windowBackgroundColor; self.window.minSize = NSMakeSize(180, 140);
-  NSView *content = self.window.contentView;
+  self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.minSize = NSMakeSize(180, 140);
+  NSView *content = FinderWindowContent(self.window);
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 336, 300, 24)];
+  if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   self.header.titleLabel.stringValue = [NSString stringWithFormat:@"Links · %@", catalog[@"title"] ?: @""];
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 336)];
-  self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; self.scroll.hasVerticalScroller = YES; self.scroll.borderType = NSNoBorder;
+  self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; self.scroll.hasVerticalScroller = YES; self.scroll.borderType = NSNoBorder; self.scroll.drawsBackground = NO;
   self.table = [[FinderRelatedTable alloc] initWithFrame:self.scroll.bounds];
   ((FinderRelatedTable *)self.table).owner = self; self.table.headerView = nil; self.table.allowsMultipleSelection = YES; self.table.allowsEmptySelection = YES;
   self.table.usesAlternatingRowBackgroundColors = NO; self.table.backgroundColor = NSColor.clearColor; self.table.rowHeight = 34; self.table.intercellSpacing = NSMakeSize(0, 0);
@@ -321,18 +345,19 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.movableByWindowBackground = YES;
   self.window.delegate = self;
   self.window.hasShadow = NO;
-  self.window.backgroundColor = NSColor.windowBackgroundColor;
   self.window.minSize = NSMakeSize(180, 140);
   [self.window center];
-  NSView *content = self.window.contentView;
+  NSView *content = FinderWindowContent(self.window);
 
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 396, 300, 24)];
+  if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 396)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.scroll.hasVerticalScroller = YES;
   self.scroll.borderType = NSNoBorder;
+  self.scroll.drawsBackground = NO;
   self.table = [[FinderNativeTable alloc] initWithFrame:self.scroll.bounds];
   self.table.owner = self;
   self.table.hoveredRow = -1;
