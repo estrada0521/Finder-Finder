@@ -10,6 +10,15 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // NSMenu key-equivalent handling can temporarily clear NSApp.keyWindow. Keep
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
+static const CGFloat FinderHeaderHeight = 36;
+
+static NSColor *FinderGlassTint(void) {
+  return [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
+    NSAppearanceName match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+    if ([match isEqualToString:NSAppearanceNameDarkAqua]) return [NSColor colorWithWhite:0 alpha:0.38];
+    return [NSColor colorWithWhite:1 alpha:0.30];
+  }];
+}
 
 static NSWindowStyleMask FinderWindowStyle(void) {
   return NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable | NSWindowStyleMaskFullSizeContentView;
@@ -30,9 +39,13 @@ static NSView *FinderWindowContent(NSWindow *window) {
   if (@available(macOS 26.0, *)) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    glass.style = NSGlassEffectViewStyleClear;
-    glass.cornerRadius = 28;
-    glass.tintColor = [NSColor.windowBackgroundColor colorWithAlphaComponent:0.35];
+    glass.style = NSGlassEffectViewStyleRegular;
+    glass.cornerRadius = 22;
+    glass.tintColor = FinderGlassTint();
+    glass.wantsLayer = YES;
+    glass.layer.cornerRadius = 22;
+    glass.layer.borderWidth = 1.0 / NSScreen.mainScreen.backingScaleFactor;
+    glass.layer.borderColor = [NSColor colorWithWhite:1 alpha:0.42].CGColor;
     [root addSubview:glass positioned:NSWindowBelow relativeTo:nil];
     window.backgroundColor = NSColor.clearColor;
     window.opaque = NO;
@@ -149,8 +162,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (instancetype)initWithFrame:(NSRect)frameRect {
   if (!(self = [super initWithFrame:frameRect])) return nil;
   self.titleLabel = [NSTextField labelWithString:@""];
-  self.titleLabel.frame = NSMakeRect(12, 2, 260, 20);
-  self.titleLabel.font = [NSFont systemFontOfSize:14];
+  self.titleLabel.frame = NSMakeRect(20, 8, 260, 20);
+  self.titleLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
   self.titleLabel.textColor = NSColor.labelColor;
   self.titleLabel.autoresizingMask = NSViewWidthSizable;
   [self addSubview:self.titleLabel];
@@ -161,9 +174,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (!self.usesLiquidGlass) {
     [NSColor.controlBackgroundColor setFill];
     NSRectFill(self.bounds);
+    [NSColor.separatorColor setFill];
+    NSRectFill(NSMakeRect(0, 0, self.bounds.size.width, 1));
   }
-  [NSColor.separatorColor setFill];
-  NSRectFill(NSMakeRect(0, 0, self.bounds.size.width, 1));
 }
 - (void)mouseDown:(NSEvent *)event { self.startMouse = NSEvent.mouseLocation; self.startFrame = self.window.frame; }
 - (void)mouseDragged:(NSEvent *)event {
@@ -261,12 +274,12 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.delegate = self;
   self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.minSize = NSMakeSize(180, 140);
   NSView *content = FinderWindowContent(self.window);
-  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 336, 300, 24)];
+  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 324, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   self.header.titleLabel.stringValue = [NSString stringWithFormat:@"Links · %@", catalog[@"title"] ?: @""];
   [content addSubview:self.header];
-  self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 336)];
+  self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 324)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; self.scroll.hasVerticalScroller = YES; self.scroll.borderType = NSNoBorder; self.scroll.drawsBackground = NO;
   self.table = [[FinderRelatedTable alloc] initWithFrame:self.scroll.bounds];
   ((FinderRelatedTable *)self.table).owner = self; self.table.headerView = nil; self.table.allowsMultipleSelection = YES; self.table.allowsEmptySelection = YES;
@@ -363,11 +376,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   [self.window center];
   NSView *content = FinderWindowContent(self.window);
 
-  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 396, 300, 24)];
+  self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 384, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
   [content addSubview:self.header];
-  self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 396)];
+  self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 384)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.scroll.hasVerticalScroller = YES;
   self.scroll.borderType = NSNoBorder;
