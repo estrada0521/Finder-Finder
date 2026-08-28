@@ -94,6 +94,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) QLThumbnailGenerationRequest *thumbnailRequest;
 @end
 
+@interface FinderRecordRow : NSTableRowView
+@end
+
 @interface FinderThumbnailManager : NSObject
 @property(nonatomic) NSCache<NSString *, NSImage *> *cache;
 + (instancetype)shared;
@@ -196,6 +199,12 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   frame.origin.x += now.x - self.startMouse.x;
   frame.origin.y += now.y - self.startMouse.y;
   [self.window setFrameOrigin:frame.origin];
+}
+@end
+
+@implementation FinderRecordRow
+- (void)drawSelectionInRect:(NSRect)dirtyRect {
+  if (self.window.isKeyWindow && NSApp.isActive) [super drawSelectionInRect:dirtyRect];
 }
 @end
 
@@ -307,6 +316,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.title = catalog[@"title"] ?: @"Links"; [self.window makeKeyAndOrderFront:nil]; return self;
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.items.count; }
+- (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+  return [[FinderRecordRow alloc] initWithFrame:NSZeroRect];
+}
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
   FinderRecordCell *cell = [table makeViewWithIdentifier:@"related-cell" owner:self];
   if (!cell) { cell = [[FinderRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"related-cell"; }
@@ -501,6 +513,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (index != NSNotFound) [self chooseColumn:(NSInteger)index];
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count; }
+- (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+  return [[FinderRecordRow alloc] initWithFrame:NSZeroRect];
+}
 - (NSView *)tableView:(NSTableView *)table viewForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
   FinderRecordCell *cell = [table makeViewWithIdentifier:@"record-cell" owner:self];
   if (!cell) { cell = [[FinderRecordCell alloc] initWithFrame:NSMakeRect(0, 0, table.bounds.size.width, 34)]; cell.identifier = @"record-cell"; }
