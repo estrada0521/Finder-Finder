@@ -17,8 +17,16 @@ static NSView *FinderWindowContent(NSWindow *window) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     glass.style = NSGlassEffectViewStyleRegular;
-    NSView *content = [[NSView alloc] initWithFrame:glass.bounds];
+    glass.cornerRadius = 28;
+    glass.wantsLayer = YES;
+    glass.layer.cornerRadius = 28;
+    glass.layer.borderWidth = 1.0 / NSScreen.mainScreen.backingScaleFactor;
+    glass.layer.borderColor = NSColor.separatorColor.CGColor;
+    NSVisualEffectView *content = [[NSVisualEffectView alloc] initWithFrame:glass.bounds];
     content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    content.material = NSVisualEffectMaterialUnderWindowBackground;
+    content.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    content.state = NSVisualEffectStateFollowsWindowActiveState;
     glass.contentView = content;
     [root addSubview:glass];
     window.backgroundColor = NSColor.clearColor;
