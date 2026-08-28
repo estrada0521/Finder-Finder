@@ -32,6 +32,7 @@ static NSView *FinderWindowContent(NSWindow *window) {
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     glass.style = NSGlassEffectViewStyleClear;
     glass.cornerRadius = 28;
+    glass.tintColor = [NSColor.windowBackgroundColor colorWithAlphaComponent:0.35];
     [root addSubview:glass positioned:NSWindowBelow relativeTo:nil];
     window.backgroundColor = NSColor.clearColor;
     window.opaque = NO;
