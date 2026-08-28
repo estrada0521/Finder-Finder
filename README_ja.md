@@ -4,14 +4,11 @@ Finder to find Finder.
 
 [English](README.md)
 
-Finder Finder は、既存の record ディレクトリを閲覧するための小さな macOS
-アプリです。record ごとの JSON metadata を高速なリストへ読み込み、実ファイルを
-Quick Look、Finder、クリップボード、既定アプリへ接続します。
+Finder Finder は、既存の record ディレクトリを閲覧し、そのファイルを Quick Look、Finder、クリップボード、既定アプリへ接続するアプリです。
 
 ## DB の形
 
-一つのディレクトリを DB root として指定します。その直下にある隠しでないディレクトリは
-すべて record として扱われ、ディレクトリ名が record ID になります。
+一つのディレクトリを DB root として指定します。その直下にあり、`metadata.json` を持つディレクトリが record です。
 
 ```text
 Database/
@@ -19,24 +16,14 @@ Database/
 │   ├── metadata.json
 │   ├── measurement.csv
 │   └── preview.png
-├── experiment-alpha/
-│   ├── metadata.json
-│   └── result.pdf
-└── notes/                 # 隠しディレクトリでなければこれも record
-    └── metadata.json
+└── experiment-alpha/
+    ├── metadata.json
+    └── result.pdf
 ```
 
-ID は opaque な文字列です。Finder Finder は 6 桁・数字のみ・特定の命名規則を
-要求しません。また、再帰的には探索せず、DB root の直下だけを record と見なします。
+## Metadata
 
-推奨する metadata ファイル名は `metadata.json` です。互換のため、それが存在しない
-場合は record 直下の `.json` ファイルのうち辞書順で最初のものを使います。metadata を
-正しく読めない record も発見自体はされますが、category は空になり、通常の操作も使え
-ません。実用上は `metadata.json` を必須と考えてください。
-
-## Metadata 契約
-
-metadata は JSON object です。典型的な完全形は次のとおりです。
+各 `metadata.json` は JSON object です。
 
 ```json
 {
@@ -50,20 +37,17 @@ metadata は JSON object です。典型的な完全形は次のとおりです�
 
 | Field | 必須 | 意味 |
 | --- | --- | --- |
-| `category` | はい | アプリで表示する category。`rawdata`、`analysis`、`sample` のような任意の空でない名前です。 |
-| `display_name` | いいえ | 人間向けの行タイトル。存在しない、または空なら record ID を使います。 |
-| `payload` | ファイル操作には必要 | record 内の一つのファイル名、またはファイル名の配列です。アプリが開く・Finder で表示する・コピーする実体であり、すべて存在する必要があります。 |
-| `preview` | いいえ | record 内にある、Quick Look 対応の視覚的な派生物です。行のサムネイルと Quick Look にだけ使います。 |
-| `links` | いいえ | `id` を持つ object の配列です。この record から別の record への直接の関係を宣言します。 |
+| `category` | はい | アプリで表示する category。 |
+| `display_name` | いいえ | 行タイトル。なければ record ID を使います。 |
+| `payload` | ファイル操作には必要 | record 内の一つのファイル名、またはファイル名の配列。 |
+| `preview` | いいえ | record 内の、Quick Look 対応の表示用ファイル。 |
+| `links` | いいえ | `id` field を持つ object の配列。 |
 
-`payload` と `preview` には record ディレクトリからの相対パスを使ってください。
-`preview` は同じ record ディレクトリの内部にあるファイルとして解決できる必要があります。
-Finder Finder は、Finder で開く対象や既定アプリで開く対象を preview に置き換えません。
+パスは record directory からの相対パスを使います。preview は表示用、payload は source of truth です。
 
 ### Preview
 
-preview は意図的に format-agnostic です。元データを最もよく理解している任意のツールで
-作った、Quick Look が表示できるファイルであれば構いません。
+preview には、record とともに置かれた任意の Quick Look 対応表現を使えます。
 
 ```text
 CSV       → PNG
@@ -73,18 +57,9 @@ audio     → waveform PNG
 dataset   → HTML snapshot
 ```
 
-preview を持たない record も有効です。その場合は payload の通常の system icon と
-Quick Look 表現を使います。
+### Link
 
-### Link は両方向・1 hop
-
-record `A` で links command を実行すると、次の両方を表示します。
-
-- `A.links` が名前として持つ record
-- `links` 配列の中で `A` を名前として持つ record
-
-対象は直接の関係だけです。アプリは link を再帰展開せず、順方向・逆方向の両方から
-到達した record も一度だけ表示します。
+link window には、直接 link している record を順方向・逆方向から集め、一度ずつ表示します。
 
 ## 各操作が対象にするもの
 
@@ -93,12 +68,9 @@ record `A` で links command を実行すると、次の両方を表示します
 | 行のサムネイル | `preview`。なければ最初の `payload` |
 | Quick Look | `preview` があればそれ。なければ各 payload |
 | Payload を開く | `payload` |
-| Finder で表示 (`⌘F`) | 通常リストでは metadata（したがって record directory）。Quick Look 中では payload |
-| Path をコピー (`⌘P`) | 通常リストでは record directory。Quick Look 中では payload |
-| Metadata を開く | record の metadata JSON |
-
-この区別は意図的なものです。preview は record を一目で読めるようにするための表現であり、
-payload が source of truth のままです。
+| Finder で表示 (`⌘F`) | 通常リストでは metadata、Quick Look 中では payload |
+| Path をコピー (`⌘P`) | 通常リストでは record directory、Quick Look 中では payload |
+| Metadata を開く | `metadata.json` |
 
 ## 設定
 
@@ -108,29 +80,14 @@ payload が source of truth のままです。
 FINDER_FINDER_DB_ROOT=/path/to/Database ./build
 ```
 
-選んだ root は次に保存されます。
+設定は `~/.finder-finder/settings.json` に保存されます。DB を切り替える場合は、その中の `dbRoot` を編集してください。
 
-```text
-~/.finder-finder/settings.json
-```
-
-後から DB を切り替える場合は、その中の `dbRoot` を編集してください。Finder Finder は
-通常 DB を変更しません。ただし Rename は record の metadata JSON にある
-`display_name` を更新します。
-
-## Build と install
-
-Finder Finder は Rust core と小さな Objective-C/AppKit shell からなります。
+## Build
 
 ```sh
 ./build
 ```
 
-release app を build し、次へ install します。
+アプリは `/Applications/Finder Finder.app` に install されます。
 
-```text
-/Applications/Finder Finder.app
-```
-
-反復開発には `./build --dev` を使えます。source の変更は rebuild とアプリの
-restart を必要とします。
+反復開発には `./build --dev` を使えます。source の変更には rebuild とアプリの restart が必要です。

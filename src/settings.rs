@@ -77,26 +77,7 @@ pub fn is_record_id(name: &str) -> bool {
 }
 
 pub fn metadata_path(dir: &Path) -> PathBuf {
-    let metadata = dir.join("metadata.json");
-    if metadata.is_file() {
-        return metadata;
-    }
-    let mut jsons = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-            {
-                jsons.push(path);
-            }
-        }
-    }
-    jsons.sort();
-    jsons.into_iter().next().unwrap_or(metadata)
+    dir.join("metadata.json")
 }
 
 pub fn present_categories() -> Result<Vec<String>, String> {

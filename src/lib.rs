@@ -113,6 +113,7 @@ fn all_record_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(settings::is_record_id)
+                && settings::metadata_path(path).is_file()
         })
         .collect::<Vec<_>>();
     dirs.sort();
