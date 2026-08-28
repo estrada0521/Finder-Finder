@@ -252,7 +252,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   NSDictionary *item = self.items[(NSUInteger)row];
   cell.titleView.stringValue = [NSString stringWithFormat:@"%@  %@", item[@"label"], item[@"title"]];
   [cell setNeedsLayout:YES];
-  [[FinderThumbnailManager shared] loadPayload:item[@"preview"] ?: item[@"payload"] intoCell:cell scale:self.window.backingScaleFactor ?: 1.0];
+  NSString *preview = item[@"preview"];
+  [[FinderThumbnailManager shared] loadPayload:preview.length ? preview : item[@"payload"] intoCell:cell scale:self.window.backingScaleFactor ?: 1.0];
   return cell;
 }
 - (void)openSelected {
