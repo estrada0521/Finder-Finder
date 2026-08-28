@@ -12,12 +12,27 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 static NSWindow *lastKeyWindow;
 static const CGFloat FinderHeaderHeight = 36;
 
-static NSColor *FinderGlassTint(void) {
+static NSColor *FinderGlassTint(BOOL inactive) {
   return [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
     NSAppearanceName match = [appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
-    if ([match isEqualToString:NSAppearanceNameDarkAqua]) return [NSColor colorWithWhite:0 alpha:0.38];
-    return [NSColor colorWithWhite:1 alpha:0.30];
+    if ([match isEqualToString:NSAppearanceNameDarkAqua]) return [NSColor colorWithWhite:0 alpha:inactive ? 0.58 : 0.38];
+    return [NSColor colorWithWhite:1 alpha:inactive ? 0.38 : 0.30];
   }];
+}
+
+static void FinderUpdateGlassTint(NSWindow *window) {
+  if (@available(macOS 26.0, *)) {
+    for (NSView *view in window.contentView.subviews) {
+      if ([view isKindOfClass:NSGlassEffectView.class]) {
+        ((NSGlassEffectView *)view).tintColor = FinderGlassTint(!NSApp.isActive);
+        return;
+      }
+    }
+  }
+}
+
+static void FinderUpdateAllGlassTints(void) {
+  for (NSWindow *window in NSApp.windows) FinderUpdateGlassTint(window);
 }
 
 static NSWindowStyleMask FinderWindowStyle(void) {
@@ -40,12 +55,8 @@ static NSView *FinderWindowContent(NSWindow *window) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:root.bounds];
     glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     glass.style = NSGlassEffectViewStyleRegular;
-    glass.cornerRadius = 22;
-    glass.tintColor = FinderGlassTint();
-    glass.wantsLayer = YES;
-    glass.layer.cornerRadius = 22;
-    glass.layer.borderWidth = 1.0 / NSScreen.mainScreen.backingScaleFactor;
-    glass.layer.borderColor = [NSColor colorWithWhite:1 alpha:0.42].CGColor;
+    glass.cornerRadius = 18;
+    glass.tintColor = FinderGlassTint(!NSApp.isActive);
     [root addSubview:glass positioned:NSWindowBelow relativeTo:nil];
     window.backgroundColor = NSColor.clearColor;
     window.opaque = NO;
@@ -272,7 +283,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
   FinderConfigureWindow(self.window);
   self.window.delegate = self;
-  self.window.movableByWindowBackground = YES; self.window.hasShadow = NO; self.window.minSize = NSMakeSize(180, 140);
+  self.window.movableByWindowBackground = YES; self.window.hasShadow = YES; self.window.minSize = NSMakeSize(180, 140);
   NSView *content = FinderWindowContent(self.window);
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 324, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
@@ -364,6 +375,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @implementation FinderNativeController
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
+- (void)applicationDidBecomeActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
+- (void)applicationDidResignActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 
 - (void)setupMainWindow {
   NSRect frame = NSMakeRect(0, 0, 300, 420);
@@ -371,7 +384,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   FinderConfigureWindow(self.window);
   self.window.movableByWindowBackground = YES;
   self.window.delegate = self;
-  self.window.hasShadow = NO;
+  self.window.hasShadow = YES;
   self.window.minSize = NSMakeSize(180, 140);
   [self.window center];
   NSView *content = FinderWindowContent(self.window);
@@ -426,6 +439,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
   NSMenuItem *close = [file addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"];
   close.target = self;
+  NSMenuItem *keepInFront = [file addItemWithTitle:@"Keep in Front" action:@selector(toggleKeepInFront:) keyEquivalent:@"t"];
+  keepInFront.target = self;
   [file addItem:[NSMenuItem separatorItem]];
   [file addItemWithTitle:@"Open Metadata" action:@selector(metadata:) keyEquivalent:@"j"];
   NSMenuItem *rename = [file addItemWithTitle:@"Rename" action:@selector(renameSelected:) keyEquivalent:@"\r"];
@@ -520,6 +535,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   lastKeyWindow = nil;
   [window close];
 }
+- (void)toggleKeepInFront:(id)sender {
+  NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
+  window.level = window.level == NSFloatingWindowLevel ? NSNormalWindowLevel : NSFloatingWindowLevel;
+}
 - (void)renameSelected:(id)sender {
   if (self.table.selectedRowIndexes.count != 1) return;
   NSDictionary *record = self.records[(NSUInteger)self.table.selectedRow];
@@ -548,6 +567,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:self.window]; [self.relatedControllers addObject:controller];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
+  if (item.action == @selector(toggleKeepInFront:)) {
+    NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
+    item.state = window.level == NSFloatingWindowLevel ? NSControlStateValueOn : NSControlStateValueOff;
+    return YES;
+  }
   if (item.action == @selector(openRelated:)) {
     return NSApp.orderedWindows.firstObject == self.window
         && (self.table.selectedRow >= 0 || self.table.hoveredRow >= 0);

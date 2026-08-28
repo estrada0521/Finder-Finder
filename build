@@ -11,10 +11,10 @@ while [[ $# -gt 0 ]]; do
     --dev) DEV=1 ;;
     --no-open) OPEN_APP=0 ;;
     --help|-h)
-      echo 'Usage: ./native_start [--dev] [--no-open]'
+      echo 'Usage: ./build [--dev] [--no-open]'
       echo '  --dev: cargo run; Rust/Objective-C changes compile incrementally.'
       exit 0 ;;
-    *) echo "native_start: unknown option: $1" >&2; exit 1 ;;
+    *) echo "build: unknown option: $1" >&2; exit 1 ;;
   esac
   shift
 done
@@ -35,5 +35,5 @@ cp "$TARGET_DIR/release/finder-finder-native" "$APP/Contents/MacOS/finder-finder
 INSTALLED="/Applications/Finder Finder.app"
 rm -rf "$INSTALLED"
 mv "$APP" "$INSTALLED"
-echo "native_start: installed app at $INSTALLED"
+echo "build: installed app at $INSTALLED"
 if (( OPEN_APP )); then open "$INSTALLED"; fi
