@@ -217,7 +217,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   NSMutableArray *items = [NSMutableArray array];
   for (NSDictionary *column in catalog[@"columns"] ?: @[]) {
     for (NSDictionary *record in column[@"records"] ?: @[]) {
-      [items addObject:@{ @"kind": column[@"kind"] ?: @"", @"id": record[@"id"] ?: @"", @"title": record[@"title"] ?: record[@"id"] ?: @"", @"label": column[@"label"] ?: column[@"kind"] ?: @"", @"payload": record[@"payload"] ?: @"" }];
+      [items addObject:@{ @"kind": column[@"kind"] ?: @"", @"id": record[@"id"] ?: @"", @"title": record[@"title"] ?: record[@"id"] ?: @"", @"label": column[@"label"] ?: column[@"kind"] ?: @"", @"payload": record[@"payload"] ?: @"", @"preview": record[@"preview"] ?: @"" }];
     }
   }
   self.items = items;
