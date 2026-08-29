@@ -69,7 +69,8 @@ The links window presents directly linked records in both directions and shows e
 | Quick Look | `preview` when present; otherwise each payload |
 | Open payload | `payload` |
 | Reveal in Finder (`⌘F`) | Metadata from the list; payload from Quick Look |
-| Copy path (`⌘P`) | Record directory from the list; payload from Quick Look |
+| Copy relative path (`⌘P`) | DB-root-relative record directory from the list; DB-root-relative payload from Quick Look |
+| Copy full path (`⌥⌘P`) | Record directory from the list; payload from Quick Look |
 | Open Metadata | `metadata.json` |
 
 ## Configuration

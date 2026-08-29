@@ -69,7 +69,8 @@ link window には、直接 link している record を順方向・逆方向か
 | Quick Look | `preview` があればそれ。なければ各 payload |
 | Payload を開く | `payload` |
 | Finder で表示 (`⌘F`) | 通常リストでは metadata、Quick Look 中では payload |
-| Path をコピー (`⌘P`) | 通常リストでは record directory、Quick Look 中では payload |
+| 相対 Path をコピー (`⌘P`) | 通常リストでは DB root 基準の record directory、Quick Look 中では DB root 基準の payload |
+| フル Path をコピー (`⌥⌘P`) | 通常リストでは record directory、Quick Look 中では payload |
 | Metadata を開く | `metadata.json` |
 
 ## 設定

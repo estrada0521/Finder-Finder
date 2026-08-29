@@ -518,6 +518,24 @@ fn copy_paths_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
     Ok(())
 }
 
+fn copy_paths_relative_to_db_root(paths: &[PathBuf]) -> Result<(), String> {
+    let root = PathBuf::from(db_root()?)
+        .canonicalize()
+        .map_err(|err| format!("failed to resolve DB root: {err}"))?;
+    let relative = paths
+        .iter()
+        .map(|path| {
+            let path = path
+                .canonicalize()
+                .map_err(|err| format!("failed to resolve path: {err}"))?;
+            path.strip_prefix(&root)
+                .map(|value| value.to_path_buf())
+                .map_err(|_| format!("path is outside DB root: {}", path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    copy_paths_to_clipboard(&relative)
+}
+
 fn copy_record_paths(kind: String, ids: Vec<String>) -> Result<(), String> {
     require_folder(&kind)?;
     copy_paths_to_clipboard(&record_paths(&ids)?)
@@ -758,6 +776,14 @@ fn native_action(kind: *const c_char, ids: *const c_char, action: &str) {
                     copy_paths_to_clipboard(&item.payloads)
                 } else {
                     copy_record_paths(kind, ids)
+                }
+            }
+            "copy-relative" => {
+                if let Some(item) = active_ql_item() {
+                    copy_paths_relative_to_db_root(&item.payloads)
+                } else {
+                    require_folder(&kind)?;
+                    copy_paths_relative_to_db_root(&record_paths(&ids)?)
                 }
             }
             _ => Ok(()),

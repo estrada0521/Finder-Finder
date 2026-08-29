@@ -718,7 +718,10 @@ static void FinderDatabaseEvents(
   [file addItemWithTitle:@"Reveal in Finder" action:@selector(reveal:) keyEquivalent:@"f"];
   NSMenuItem *openQuickLook = [file addItemWithTitle:@"Open Quick Look Original" action:@selector(openQuickLookOriginal:) keyEquivalent:@"o"];
   openQuickLook.target = self;
-  NSMenuItem *copyPath = [file addItemWithTitle:@"Copy Path" action:@selector(copy:) keyEquivalent:@"p"];
+  NSMenuItem *copyRelativePath = [file addItemWithTitle:@"Copy Relative Path" action:@selector(copyRelative:) keyEquivalent:@"p"];
+  copyRelativePath.target = self;
+  NSMenuItem *copyPath = [file addItemWithTitle:@"Copy Full Path" action:@selector(copy:) keyEquivalent:@"p"];
+  copyPath.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
   copyPath.target = self;
   fileItem.submenu = file; NSApp.mainMenu = bar;
   NSMenuItem *linkItem = [NSMenuItem new]; [bar addItem:linkItem];
@@ -878,7 +881,7 @@ static void FinderDatabaseEvents(
   FinderBeginPayloadDrag(table, event, FinderPayloadURLs(self.kind, self.selectedIds));
 }
 - (void)act:(NSString *)action {
-  NSArray *ids = self.selectedIds; if (!ids.count && ![action isEqual:@"reveal"] && ![action isEqual:@"copy"]) return;
+  NSArray *ids = self.selectedIds; if (!ids.count && ![action isEqual:@"reveal"] && ![action isEqual:@"copy"] && ![action isEqual:@"copy-relative"]) return;
   NSData *data = [NSJSONSerialization dataWithJSONObject:ids options:0 error:nil];
   NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
   finder_native_action(self.kind.UTF8String, json.UTF8String, action.UTF8String);
@@ -889,6 +892,7 @@ static void FinderDatabaseEvents(
 - (void)metadata:(id)sender { [self act:@"metadata"]; }
 - (void)reveal:(id)sender { [self act:@"reveal"]; }
 - (void)copy:(id)sender { [self act:@"copy"]; }
+- (void)copyRelative:(id)sender { [self act:@"copy-relative"]; }
 - (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
 - (void)closeWindow:(id)sender {
   NSWindow *window = NSApp.orderedWindows.firstObject ?: lastKeyWindow ?: self.window;
