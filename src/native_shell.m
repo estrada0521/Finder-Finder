@@ -4,6 +4,7 @@
 extern char *finder_native_catalog_json(void);
 extern char *finder_native_related_json(const char *kind, const char *id);
 extern char *finder_native_payloads_json(const char *kind, const char *ids);
+extern char *finder_native_create_record(const char *category, const char *name, const char *paths);
 extern void finder_native_free_string(char *value);
 extern void finder_native_action(const char *kind, const char *ids, const char *action);
 extern bool finder_native_rename(const char *kind, const char *id, const char *name);
@@ -23,15 +24,6 @@ static NSArray<NSURL *> *FinderDroppedFileURLs(id<NSDraggingInfo> info) {
 
 static NSDragOperation FinderPayloadDropOperation(id<NSDraggingInfo> info) {
   return FinderDroppedFileURLs(info).count ? NSDragOperationCopy : NSDragOperationNone;
-}
-
-// The receiving side deliberately has no persistence behavior yet. It accepts
-// external file URLs so the later import/link policy can be added at one point.
-static BOOL FinderAcceptPayloadDrop(id<NSDraggingInfo> info) {
-  NSArray<NSURL *> *urls = FinderDroppedFileURLs(info);
-  if (!urls.count) return NO;
-  NSLog(@"Finder Finder received payload drop: %@", urls);
-  return YES;
 }
 
 static NSArray<NSURL *> *FinderPayloadURLs(NSString *kind, NSArray<NSString *> *ids) {
@@ -113,6 +105,7 @@ static void FinderConfigureWindow(NSWindow *window) {
 }
 
 @interface FinderDropView : NSView
+@property(nonatomic, copy) BOOL (^onFileDrop)(NSArray<NSURL *> *urls);
 @end
 
 @implementation FinderDropView
@@ -122,7 +115,10 @@ static void FinderConfigureWindow(NSWindow *window) {
   return self;
 }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  return [self acceptFileDrop:FinderDroppedFileURLs(sender)];
+}
+- (BOOL)acceptFileDrop:(NSArray<NSURL *> *)urls { return urls.count && self.onFileDrop ? self.onFileDrop(urls) : NO; }
 @end
 
 static NSView *FinderWindowContent(NSWindow *window) {
@@ -203,6 +199,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSMutableArray *relatedControllers;
 - (void)setupMainWindow;
+- (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
 @end
 
 @implementation FinderNativeTable
@@ -241,7 +238,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
 @implementation FinderResizeGrip
@@ -387,6 +384,12 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.delegate = self;
   self.window.movableByWindowBackground = YES; self.window.hasShadow = YES; self.window.minSize = NSMakeSize(180, 140);
   NSView *content = FinderWindowContent(self.window);
+  __weak NSWindow *weakWindow = self.window;
+  ((FinderDropView *)content).onFileDrop = ^BOOL(NSArray<NSURL *> *urls) {
+    FinderNativeController *controller = (FinderNativeController *)NSApp.delegate;
+    [controller importDroppedFiles:urls fromWindow:weakWindow ?: controller.window];
+    return YES;
+  };
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 324, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
@@ -410,6 +413,13 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.title = catalog[@"title"] ?: @"Links"; [self.window makeKeyAndOrderFront:nil]; return self;
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.items.count; }
+- (NSDragOperation)tableView:(NSTableView *)tableView validateDrop:(id<NSDraggingInfo>)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)dropOperation {
+  [tableView setDropRow:-1 dropOperation:NSTableViewDropOn];
+  return FinderPayloadDropOperation(info);
+}
+- (BOOL)tableView:(NSTableView *)tableView acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)row dropOperation:(NSTableViewDropOperation)dropOperation {
+  return [(id)tableView.window.contentView acceptFileDrop:FinderDroppedFileURLs(info)];
+}
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
   return [[FinderRecordRow alloc] initWithFrame:NSZeroRect];
 }
@@ -506,7 +516,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
 @implementation FinderNativeController
@@ -525,6 +535,13 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.window.minSize = NSMakeSize(180, 140);
   [self.window center];
   NSView *content = FinderWindowContent(self.window);
+  __weak FinderNativeController *weakSelf = self;
+  ((FinderDropView *)content).onFileDrop = ^BOOL(NSArray<NSURL *> *urls) {
+    FinderNativeController *controller = weakSelf;
+    if (!controller) return NO;
+    [controller importDroppedFiles:urls fromWindow:controller.window];
+    return YES;
+  };
 
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 384, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
@@ -622,6 +639,66 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (self.columns.count) [self chooseColumn:0]; else { self.records = @[]; [self.table reloadData]; }
 }
 
+- (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window {
+  if (!urls.count || !self.columns.count) return;
+  NSAlert *alert = [NSAlert new];
+  alert.messageText = @"Add Record";
+  alert.informativeText = [NSString stringWithFormat:@"%ld payload%@", urls.count, urls.count == 1 ? @"" : @"s"];
+  NSView *form = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 68)];
+  NSTextField *categoryLabel = [NSTextField labelWithString:@"Category"];
+  categoryLabel.frame = NSMakeRect(0, 43, 98, 20);
+  [form addSubview:categoryLabel];
+  NSPopUpButton *category = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(104, 39, 216, 26) pullsDown:NO];
+  for (NSDictionary *column in self.columns) {
+    [category addItemWithTitle:column[@"label"] ?: column[@"kind"] ?: @""];
+    category.lastItem.representedObject = column[@"kind"] ?: @"";
+  }
+  [form addSubview:category];
+  NSTextField *nameLabel = [NSTextField labelWithString:@"Display name"];
+  nameLabel.frame = NSMakeRect(0, 8, 98, 20);
+  [form addSubview:nameLabel];
+  NSTextField *name = [[NSTextField alloc] initWithFrame:NSMakeRect(104, 4, 216, 24)];
+  name.placeholderString = @"Display name";
+  if (urls.count == 1) name.stringValue = urls.firstObject.lastPathComponent.stringByDeletingPathExtension;
+  [form addSubview:name];
+  alert.accessoryView = form;
+  [alert addButtonWithTitle:@"Add"];
+  [alert addButtonWithTitle:@"Cancel"];
+  [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
+    if (response != NSAlertFirstButtonReturn) return;
+    NSString *kind = category.selectedItem.representedObject ?: @"";
+    NSString *displayName = [name.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:urls.count];
+    for (NSURL *url in urls) if (url.isFileURL && url.path.length) [paths addObject:url.path];
+    NSData *request = [NSJSONSerialization dataWithJSONObject:paths options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:request encoding:NSUTF8StringEncoding];
+    char *raw = json ? finder_native_create_record(kind.UTF8String, displayName.UTF8String, json.UTF8String) : NULL;
+    NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
+    if (raw) finder_native_free_string(raw);
+    NSDictionary *result = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (result[@"error"] || !result[@"id"]) {
+      NSAlert *error = [NSAlert new];
+      error.messageText = @"Could not add record";
+      error.informativeText = result[@"error"] ?: @"Unknown error";
+      [error beginSheetModalForWindow:window completionHandler:nil];
+      return;
+    }
+    [self loadCatalog];
+    NSUInteger columnIndex = [self.columns indexOfObjectPassingTest:^BOOL(NSDictionary *column, NSUInteger index, BOOL *stop) {
+      (void)index; (void)stop;
+      return [column[@"kind"] isEqualToString:kind];
+    }];
+    if (columnIndex != NSNotFound) {
+      [self chooseColumn:(NSInteger)columnIndex];
+      NSUInteger row = [self.records indexOfObjectPassingTest:^BOOL(NSDictionary *record, NSUInteger index, BOOL *stop) {
+        (void)index; (void)stop;
+        return [record[@"id"] isEqualToString:result[@"id"]];
+      }];
+      if (row != NSNotFound) [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    }
+  }];
+}
+
 - (void)chooseColumn:(NSInteger)index {
   if (index < 0 || index >= (NSInteger)self.columns.count) return;
   NSDictionary *column = self.columns[(NSUInteger)index];
@@ -639,6 +716,13 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (index != NSNotFound) [self chooseColumn:(NSInteger)index];
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count; }
+- (NSDragOperation)tableView:(NSTableView *)tableView validateDrop:(id<NSDraggingInfo>)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)dropOperation {
+  [tableView setDropRow:-1 dropOperation:NSTableViewDropOn];
+  return FinderPayloadDropOperation(info);
+}
+- (BOOL)tableView:(NSTableView *)tableView acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)row dropOperation:(NSTableViewDropOperation)dropOperation {
+  return [(id)tableView.window.contentView acceptFileDrop:FinderDroppedFileURLs(info)];
+}
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
   return [[FinderRecordRow alloc] initWithFrame:NSZeroRect];
 }

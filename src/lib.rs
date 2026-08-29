@@ -523,6 +523,91 @@ fn copy_record_paths(kind: String, ids: Vec<String>) -> Result<(), String> {
     copy_paths_to_clipboard(&record_paths(&ids)?)
 }
 
+fn next_record_id(root: &Path) -> Result<String, String> {
+    let mut highest = 0u64;
+    for entry in fs::read_dir(root).map_err(|err| format!("failed to read DB root: {err}"))? {
+        let entry = entry.map_err(|err| format!("failed to read DB root: {err}"))?;
+        if !entry.path().is_dir() {
+            continue;
+        }
+        if let Some(value) = entry.file_name().to_str().and_then(|name| name.parse::<u64>().ok()) {
+            highest = highest.max(value);
+        }
+    }
+    Ok(format!("{:06}", highest + 1))
+}
+
+fn unique_payload_path(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let original = Path::new(name);
+    let stem = original.file_stem().unwrap_or(name).to_string_lossy();
+    let extension = original.extension().map(|value| format!(".{}", value.to_string_lossy())).unwrap_or_default();
+    let mut index = 1usize;
+    loop {
+        let filename = if index == 1 { format!("{stem}{extension}") } else { format!("{stem}-{index}{extension}") };
+        let candidate = dir.join(filename);
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn create_record(category: &str, display_name: &str, source_paths: Vec<String>) -> Result<String, String> {
+    require_folder(category)?;
+    let display_name = display_name.trim();
+    if display_name.is_empty() {
+        return Err("display name is empty".to_string());
+    }
+    if source_paths.is_empty() {
+        return Err("no payload files were dropped".to_string());
+    }
+    let sources = source_paths
+        .into_iter()
+        .map(|value| {
+            let path = PathBuf::from(value).canonicalize().map_err(|err| format!("failed to resolve payload: {err}"))?;
+            if path.is_file() { Ok(path) } else { Err(format!("payload is not a file: {}", path.display())) }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let root = PathBuf::from(db_root()?);
+    if !root.is_dir() {
+        return Err(format!("DB root not found: {}", root.display()));
+    }
+
+    let (id, record) = loop {
+        let id = next_record_id(&root)?;
+        let record = root.join(&id);
+        match fs::create_dir(&record) {
+            Ok(()) => break (id, record),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("failed to create record: {err}")),
+        }
+    };
+    let result = (|| -> Result<(), String> {
+        let payload_dir = record.join("payload");
+        fs::create_dir(&payload_dir).map_err(|err| format!("failed to create payload directory: {err}"))?;
+        let mut payloads = Vec::with_capacity(sources.len());
+        for source in sources {
+            let filename = source.file_name().ok_or("payload filename is missing")?;
+            let destination = unique_payload_path(&payload_dir, filename);
+            fs::copy(&source, &destination).map_err(|err| format!("failed to copy payload: {err}"))?;
+            payloads.push(format!("payload/{}", destination.file_name().unwrap().to_string_lossy()));
+        }
+        let metadata = serde_json::json!({
+            "category": category,
+            "display_name": display_name,
+            "payload": payloads,
+        });
+        let mut text = serde_json::to_string_pretty(&metadata).map_err(|err| format!("failed to serialize metadata: {err}"))?;
+        text.push('\n');
+        fs::write(settings::metadata_path(&record), text).map_err(|err| format!("failed to write metadata: {err}"))
+    })();
+    if let Err(err) = result {
+        let _ = fs::remove_dir_all(&record);
+        return Err(err);
+    }
+    Ok(id)
+}
+
 // Native AppKit shell boundary.  JSON keeps this deliberately small while the
 // data model remains owned by Rust; Objective-C only renders and forwards UI
 // intent.
@@ -580,6 +665,20 @@ pub extern "C" fn finder_native_payloads_json(kind: *const c_char, ids: *const c
         eprintln!("[finder-finder-native] payload drag: {err}");
     }
     CString::new(result.unwrap_or_else(|_| "[]".to_string())).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn finder_native_create_record(category: *const c_char, name: *const c_char, paths: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        if category.is_null() || name.is_null() {
+            return Err("missing record value".to_string());
+        }
+        let category = unsafe { CStr::from_ptr(category) }.to_string_lossy().into_owned();
+        let name = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+        let id = create_record(&category, &name, native_ids(paths))?;
+        Ok(serde_json::json!({ "id": id }).to_string())
+    })();
+    CString::new(result.unwrap_or_else(|err| serde_json::json!({ "error": err }).to_string())).unwrap().into_raw()
 }
 
 #[no_mangle]
