@@ -3,6 +3,7 @@
 
 extern char *finder_native_catalog_json(void);
 extern char *finder_native_related_json(const char *kind, const char *id);
+extern char *finder_native_payloads_json(const char *kind, const char *ids);
 extern void finder_native_free_string(char *value);
 extern void finder_native_action(const char *kind, const char *ids, const char *action);
 extern bool finder_native_rename(const char *kind, const char *id, const char *name);
@@ -11,6 +12,39 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
 static const CGFloat FinderHeaderHeight = 36;
+
+static NSArray<NSURL *> *FinderDroppedFileURLs(id<NSDraggingInfo> info) {
+  return [info.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{ NSPasteboardURLReadingFileURLsOnlyKey: @YES }] ?: @[];
+}
+
+static NSDragOperation FinderPayloadDropOperation(id<NSDraggingInfo> info) {
+  return FinderDroppedFileURLs(info).count ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+// The receiving side deliberately has no persistence behavior yet. It accepts
+// external file URLs so the later import/link policy can be added at one point.
+static BOOL FinderAcceptPayloadDrop(id<NSDraggingInfo> info) {
+  NSArray<NSURL *> *urls = FinderDroppedFileURLs(info);
+  if (!urls.count) return NO;
+  NSLog(@"Finder Finder received payload drop: %@", urls);
+  return YES;
+}
+
+static NSArray<NSURL *> *FinderPayloadURLs(NSString *kind, NSArray<NSString *> *ids) {
+  if (!kind.length || !ids.count) return @[];
+  NSData *request = [NSJSONSerialization dataWithJSONObject:ids options:0 error:nil];
+  NSString *json = [[NSString alloc] initWithData:request encoding:NSUTF8StringEncoding];
+  char *raw = json ? finder_native_payloads_json(kind.UTF8String, json.UTF8String) : NULL;
+  NSData *response = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
+  if (raw) finder_native_free_string(raw);
+  NSArray *paths = response ? [NSJSONSerialization JSONObjectWithData:response options:0 error:nil] : nil;
+  if (![paths isKindOfClass:NSArray.class]) return @[];
+  NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+  for (id path in paths) {
+    if ([path isKindOfClass:NSString.class] && [path length]) [urls addObject:[NSURL fileURLWithPath:path]];
+  }
+  return urls;
+}
 
 static NSColor *FinderGlassTint(BOOL inactive) {
   return [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
@@ -47,8 +81,21 @@ static void FinderConfigureWindow(NSWindow *window) {
   [window standardWindowButton:NSWindowZoomButton].hidden = YES;
 }
 
+@interface FinderDropView : NSView
+@end
+
+@implementation FinderDropView
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  if (!(self = [super initWithFrame:frameRect])) return nil;
+  [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+  return self;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
+@end
+
 static NSView *FinderWindowContent(NSWindow *window) {
-  NSView *root = [[NSView alloc] initWithFrame:window.contentView.bounds];
+  NSView *root = [[FinderDropView alloc] initWithFrame:window.contentView.bounds];
   root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   window.contentView = root;
   if (@available(macOS 26.0, *)) {
@@ -70,6 +117,7 @@ static NSView *FinderWindowContent(NSWindow *window) {
 @interface FinderNativeTable : NSTableView
 @property(nonatomic, weak) id owner;
 @property(nonatomic) NSInteger hoveredRow;
+@property(nonatomic) BOOL performedPayloadDrag;
 @end
 
 typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResizeEdgeBottom, FinderResizeEdgeCorner };
@@ -113,6 +161,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 
 @interface FinderRelatedTable : NSTableView
 @property(nonatomic, weak) FinderRelatedController *owner;
+@property(nonatomic) BOOL performedPayloadDrag;
 @end
 
 @interface FinderNativeController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
@@ -129,6 +178,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 
 @implementation FinderNativeTable
 - (void)mouseDown:(NSEvent *)event {
+  self.performedPayloadDrag = NO;
   NSEventModifierFlags modifiers = event.modifierFlags;
   BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
   BOOL extendSelection = (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl)) != 0;
@@ -142,13 +192,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (self.selectedRow < 0) return;
   FinderNativeController *controller = (FinderNativeController *)self.owner;
   if (openOriginal) [controller performSelector:@selector(open:) withObject:nil];
-  else if (!extendSelection && wasSelected) [controller performSelector:@selector(quickLook:) withObject:nil];
+  else if (!extendSelection && wasSelected && !self.performedPayloadDrag) [controller performSelector:@selector(quickLook:) withObject:nil];
 }
 - (void)updateTrackingAreas {
   [super updateTrackingAreas];
   [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:self userInfo:nil]];
 }
 - (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
 @end
 
 @implementation FinderResizeGrip
@@ -303,6 +355,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; self.scroll.hasVerticalScroller = YES; self.scroll.borderType = NSNoBorder; self.scroll.drawsBackground = NO;
   self.table = [[FinderRelatedTable alloc] initWithFrame:self.scroll.bounds];
   ((FinderRelatedTable *)self.table).owner = self; self.table.headerView = nil; self.table.allowsMultipleSelection = YES; self.table.allowsEmptySelection = YES;
+  [self.table registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+  [self.table setDraggingSourceOperationMask:NSDragOperationCopy forLocal:NO];
   self.table.usesAlternatingRowBackgroundColors = NO; self.table.backgroundColor = NSColor.clearColor; self.table.rowHeight = 34; self.table.intercellSpacing = NSMakeSize(0, 0);
   self.table.autoresizingMask = NSViewWidthSizable; self.table.columnAutoresizingStyle = NSTableViewFirstColumnOnlyAutoresizingStyle; self.table.delegate = self; self.table.dataSource = self;
   NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"related"]; column.width = 300; column.resizingMask = NSTableColumnAutoresizingMask; [self.table addTableColumn:column]; self.scroll.documentView = self.table; [content addSubview:self.scroll];
@@ -331,6 +385,14 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (void)openSelected {
   [self actOnSelected:@"open"];
+}
+- (id<NSPasteboardWriting>)tableView:(NSTableView *)tableView pasteboardWriterForRow:(NSInteger)row {
+  if (row < 0 || row >= (NSInteger)self.items.count) return nil;
+  NSDictionary *item = self.items[(NSUInteger)row];
+  NSArray<NSURL *> *urls = FinderPayloadURLs(item[@"kind"] ?: @"", @[item[@"id"] ?: @""]);
+  if (!urls.count) return nil;
+  ((FinderRelatedTable *)tableView).performedPayloadDrag = YES;
+  return urls.firstObject;
 }
 - (void)windowDidBecomeKey:(NSNotification *)notification { lastKeyWindow = self.window; }
 - (void)windowDidResize:(NSNotification *)notification {
@@ -373,6 +435,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 
 @implementation FinderRelatedTable
 - (void)mouseDown:(NSEvent *)event {
+  self.performedPayloadDrag = NO;
   NSEventModifierFlags modifiers = event.modifierFlags;
   NSInteger clickedRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
   BOOL wasSelected = clickedRow >= 0 && [self.selectedRowIndexes containsIndex:(NSUInteger)clickedRow];
@@ -380,8 +443,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   [super mouseDown:event];
   if (self.selectedRow < 0) return;
   if (modifiers & NSEventModifierFlagOption) [self.owner openSelected];
-  else if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl)) && wasSelected) [self.owner quickLookSelected];
+  else if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl)) && wasSelected && !self.performedPayloadDrag) [self.owner quickLookSelected];
 }
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderAcceptPayloadDrop(sender); }
 @end
 
 @implementation FinderNativeController
@@ -417,6 +482,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.table.headerView = nil;
   self.table.allowsMultipleSelection = YES;
   self.table.allowsEmptySelection = YES;
+  [self.table registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+  [self.table setDraggingSourceOperationMask:NSDragOperationCopy forLocal:NO];
   self.table.usesAlternatingRowBackgroundColors = NO;
   self.table.backgroundColor = NSColor.clearColor;
   self.table.rowHeight = 34;
@@ -532,6 +599,14 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   return ids;
 }
 - (NSString *)kind { return self.activeKind ?: @""; }
+- (id<NSPasteboardWriting>)tableView:(NSTableView *)tableView pasteboardWriterForRow:(NSInteger)row {
+  if (row < 0 || row >= (NSInteger)self.records.count) return nil;
+  NSString *recordId = self.records[(NSUInteger)row][@"id"];
+  NSArray<NSURL *> *urls = FinderPayloadURLs(self.kind, recordId.length ? @[recordId] : @[]);
+  if (!urls.count) return nil;
+  ((FinderNativeTable *)tableView).performedPayloadDrag = YES;
+  return urls.firstObject;
+}
 - (void)act:(NSString *)action {
   NSArray *ids = self.selectedIds; if (!ids.count && ![action isEqual:@"reveal"] && ![action isEqual:@"copy"]) return;
   NSData *data = [NSJSONSerialization dataWithJSONObject:ids options:0 error:nil];

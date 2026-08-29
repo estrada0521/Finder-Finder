@@ -558,6 +558,31 @@ pub extern "C" fn finder_native_related_json(kind: *const c_char, id: *const c_c
 }
 
 #[no_mangle]
+pub extern "C" fn finder_native_payloads_json(kind: *const c_char, ids: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        if kind.is_null() {
+            return Err("missing payload kind".to_string());
+        }
+        let kind = unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned();
+        require_folder(&kind)?;
+        let root = PathBuf::from(db_root()?);
+        let paths = native_ids(ids)
+            .iter()
+            .map(|id| find_payloads(&root, id))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        serde_json::to_string(&paths).map_err(|err| err.to_string())
+    })();
+    if let Err(err) = &result {
+        eprintln!("[finder-finder-native] payload drag: {err}");
+    }
+    CString::new(result.unwrap_or_else(|_| "[]".to_string())).unwrap().into_raw()
+}
+
+#[no_mangle]
 pub extern "C" fn finder_native_rename(kind: *const c_char, id: *const c_char, name: *const c_char) -> bool {
     let result = (|| -> Result<(), String> {
         if kind.is_null() || id.is_null() || name.is_null() { return Err("missing rename value".to_string()); }
