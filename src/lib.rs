@@ -631,6 +631,12 @@ pub extern "C" fn finder_native_catalog_json() -> *mut c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn finder_native_db_root() -> *mut c_char {
+    let root = db_root().unwrap_or_default();
+    CString::new(root).unwrap().into_raw()
+}
+
+#[no_mangle]
 pub extern "C" fn finder_native_related_json(kind: *const c_char, id: *const c_char) -> *mut c_char {
     let result = (|| -> Result<String, String> {
         if kind.is_null() || id.is_null() { return Err("missing related record".to_string()); }
@@ -785,4 +791,5 @@ mod tests {
         assert_eq!(distances.len(), 2);
         assert!(!distances.contains_key("descendant"));
     }
+
 }

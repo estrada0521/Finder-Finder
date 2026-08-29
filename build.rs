@@ -11,4 +11,5 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-needed_framework,QuickLookUI");
     println!("cargo:rustc-link-lib=framework=QuickLookThumbnailing");
     println!("cargo:rustc-link-lib=framework=Cocoa");
+    println!("cargo:rustc-link-lib=framework=CoreServices");
 }

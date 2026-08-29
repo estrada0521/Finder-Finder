@@ -1,7 +1,9 @@
 #import <Cocoa/Cocoa.h>
+#import <CoreServices/CoreServices.h>
 #import <QuickLookThumbnailing/QuickLookThumbnailing.h>
 
 extern char *finder_native_catalog_json(void);
+extern char *finder_native_db_root(void);
 extern char *finder_native_related_json(const char *kind, const char *id);
 extern char *finder_native_payloads_json(const char *kind, const char *ids);
 extern char *finder_native_create_record(const char *category, const char *name, const char *paths);
@@ -13,6 +15,16 @@ extern bool finder_native_rename(const char *kind, const char *id, const char *n
 // the last key window strongly until its close action finishes.
 static NSWindow *lastKeyWindow;
 static const CGFloat FinderHeaderHeight = 36;
+
+@class FinderNativeController;
+static void FinderDatabaseEvents(
+    ConstFSEventStreamRef streamRef,
+    void *clientCallBackInfo,
+    size_t numEvents,
+    void *eventPaths,
+    const FSEventStreamEventFlags eventFlags[],
+    const FSEventStreamEventId eventIds[]
+);
 
 @protocol FinderPayloadDragOwner <NSObject>
 - (void)beginPayloadDragFromTable:(NSTableView *)table event:(NSEvent *)event;
@@ -67,6 +79,16 @@ static void FinderSelectRow(NSTableView *table, NSInteger row, NSEventModifierFl
   } else if (!wasSelected) {
     [table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
   }
+}
+
+static NSArray<NSDictionary *> *FinderRelatedItems(NSDictionary *catalog) {
+  NSMutableArray *items = [NSMutableArray array];
+  for (NSDictionary *column in catalog[@"columns"] ?: @[]) {
+    for (NSDictionary *record in column[@"records"] ?: @[]) {
+      [items addObject:@{ @"kind": column[@"kind"] ?: @"", @"id": record[@"id"] ?: @"", @"title": record[@"title"] ?: record[@"id"] ?: @"", @"label": column[@"label"] ?: column[@"kind"] ?: @"", @"payload": record[@"payload"] ?: @"", @"preview": record[@"preview"] ?: @"" }];
+    }
+  }
+  return items;
 }
 
 static NSColor *FinderGlassTint(BOOL inactive) {
@@ -183,6 +205,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSScrollView *scroll;
 @property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSArray *items;
+@property(nonatomic, copy) NSString *seedKind;
+@property(nonatomic, copy) NSString *seedID;
+- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent kind:(NSString *)kind recordID:(NSString *)recordID;
+- (void)refreshFromDatabase;
 @end
 
 @interface FinderRelatedTable : NSTableView
@@ -198,8 +224,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSString *activeKind;
 @property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSMutableArray *relatedControllers;
+@property(nonatomic) FSEventStreamRef databaseEvents;
+@property(nonatomic) BOOL catalogRefreshScheduled;
 - (void)setupMainWindow;
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
+- (void)scheduleCatalogRefresh;
 @end
 
 @implementation FinderNativeTable
@@ -370,15 +399,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderRelatedController
-- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent {
+- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent kind:(NSString *)kind recordID:(NSString *)recordID {
   if (!(self = [super init])) return nil;
-  NSMutableArray *items = [NSMutableArray array];
-  for (NSDictionary *column in catalog[@"columns"] ?: @[]) {
-    for (NSDictionary *record in column[@"records"] ?: @[]) {
-      [items addObject:@{ @"kind": column[@"kind"] ?: @"", @"id": record[@"id"] ?: @"", @"title": record[@"title"] ?: record[@"id"] ?: @"", @"label": column[@"label"] ?: column[@"kind"] ?: @"", @"payload": record[@"payload"] ?: @"", @"preview": record[@"preview"] ?: @"" }];
-    }
-  }
-  self.items = items;
+  self.seedKind = kind;
+  self.seedID = recordID;
+  self.items = FinderRelatedItems(catalog);
   self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
   FinderConfigureWindow(self.window);
   self.window.delegate = self;
@@ -411,6 +436,30 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     [content addSubview:grip];
   }
   self.window.title = catalog[@"title"] ?: @"Links"; [self.window makeKeyAndOrderFront:nil]; return self;
+}
+- (void)refreshFromDatabase {
+  if (!self.window.isVisible || !self.seedKind.length || !self.seedID.length) return;
+  NSMutableSet<NSString *> *selected = [NSMutableSet set];
+  [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
+    (void)stop;
+    NSDictionary *item = self.items[row];
+    [selected addObject:[NSString stringWithFormat:@"%@/%@", item[@"kind"], item[@"id"]]];
+  }];
+  char *raw = finder_native_related_json(self.seedKind.UTF8String, self.seedID.UTF8String);
+  NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
+  if (raw) finder_native_free_string(raw);
+  NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+  if (!catalog || catalog[@"error"]) return;
+  self.items = FinderRelatedItems(catalog);
+  self.header.titleLabel.stringValue = [NSString stringWithFormat:@"Links · %@", catalog[@"title"] ?: @""];
+  self.window.title = catalog[@"title"] ?: @"Links";
+  [self.table reloadData];
+  NSMutableIndexSet *rows = [NSMutableIndexSet indexSet];
+  [self.items enumerateObjectsUsingBlock:^(NSDictionary *item, NSUInteger index, BOOL *stop) {
+    (void)stop;
+    if ([selected containsObject:[NSString stringWithFormat:@"%@/%@", item[@"kind"], item[@"id"]]]) [rows addIndex:index];
+  }];
+  [self.table selectRowIndexes:rows byExtendingSelection:NO];
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.items.count; }
 - (NSDragOperation)tableView:(NSTableView *)tableView validateDrop:(id<NSDraggingInfo>)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)dropOperation {
@@ -519,6 +568,19 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
+static void FinderDatabaseEvents(
+    ConstFSEventStreamRef streamRef,
+    void *clientCallBackInfo,
+    size_t numEvents,
+    void *eventPaths,
+    const FSEventStreamEventFlags eventFlags[],
+    const FSEventStreamEventId eventIds[]
+) {
+  (void)streamRef; (void)numEvents; (void)eventPaths; (void)eventFlags; (void)eventIds;
+  FinderNativeController *controller = (__bridge FinderNativeController *)clientCallBackInfo;
+  [controller scheduleCatalogRefresh];
+}
+
 @implementation FinderNativeController
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
@@ -580,8 +642,61 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   }
   [self loadCatalog];
   [self installMenu];
+  [self startWatchingDatabase];
   [self.window makeKeyAndOrderFront:nil];
   [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)dealloc {
+  if (self.databaseEvents) {
+    FSEventStreamStop(self.databaseEvents);
+    FSEventStreamInvalidate(self.databaseEvents);
+    FSEventStreamRelease(self.databaseEvents);
+  }
+}
+
+- (void)startWatchingDatabase {
+  char *raw = finder_native_db_root();
+  NSString *root = raw ? [[NSString alloc] initWithUTF8String:raw] : nil;
+  if (raw) finder_native_free_string(raw);
+  if (!root.length) return;
+  FSEventStreamContext context = {0, (__bridge void *)self, NULL, NULL, NULL};
+  self.databaseEvents = FSEventStreamCreate(
+      NULL,
+      FinderDatabaseEvents,
+      &context,
+      (__bridge CFArrayRef)@[root],
+      kFSEventStreamEventIdSinceNow,
+      0.2,
+      kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer
+  );
+  if (!self.databaseEvents) return;
+  FSEventStreamSetDispatchQueue(self.databaseEvents, dispatch_get_main_queue());
+  if (!FSEventStreamStart(self.databaseEvents)) {
+    FSEventStreamInvalidate(self.databaseEvents);
+    FSEventStreamRelease(self.databaseEvents);
+    self.databaseEvents = NULL;
+  }
+}
+
+- (void)scheduleCatalogRefresh {
+  if (self.catalogRefreshScheduled) return;
+  self.catalogRefreshScheduled = YES;
+  __weak FinderNativeController *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    FinderNativeController *controller = weakSelf;
+    if (!controller) return;
+    controller.catalogRefreshScheduled = NO;
+    [controller refreshCatalogPreservingState];
+  });
+}
+
+- (void)refreshCatalogPreservingState {
+  NSString *kind = self.activeKind;
+  NSArray<NSString *> *ids = self.selectedIds;
+  [self loadCatalogPreferringKind:kind selectedIDs:ids];
+  [self installMenu];
+  for (FinderRelatedController *controller in self.relatedControllers.copy) [controller refreshFromDatabase];
 }
 
 - (void)installMenu {
@@ -631,12 +746,29 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 
 - (void)loadCatalog {
+  [self loadCatalogPreferringKind:nil selectedIDs:@[]];
+}
+
+- (void)loadCatalogPreferringKind:(NSString *)preferredKind selectedIDs:(NSArray<NSString *> *)selectedIDs {
   char *raw = finder_native_catalog_json();
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
   if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
   self.columns = catalog[@"columns"] ?: @[];
-  if (self.columns.count) [self chooseColumn:0]; else { self.records = @[]; [self.table reloadData]; }
+  if (!self.columns.count) { self.records = @[]; [self.table reloadData]; return; }
+  NSUInteger index = [self.columns indexOfObjectPassingTest:^BOOL(NSDictionary *column, NSUInteger idx, BOOL *stop) {
+    (void)idx; (void)stop;
+    return [column[@"kind"] isEqualToString:preferredKind];
+  }];
+  [self chooseColumn:index == NSNotFound ? 0 : (NSInteger)index];
+  if (!selectedIDs.count) return;
+  NSMutableSet<NSString *> *wanted = [NSMutableSet setWithArray:selectedIDs];
+  NSMutableIndexSet *rows = [NSMutableIndexSet indexSet];
+  [self.records enumerateObjectsUsingBlock:^(NSDictionary *record, NSUInteger row, BOOL *stop) {
+    (void)stop;
+    if ([wanted containsObject:record[@"id"]]) [rows addIndex:row];
+  }];
+  [self.table selectRowIndexes:rows byExtendingSelection:NO];
 }
 
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window {
@@ -792,7 +924,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   NSDictionary *record = self.records[(NSUInteger)row]; char *raw = finder_native_related_json(self.kind.UTF8String, [record[@"id"] UTF8String]);
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
-  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:self.window]; [self.relatedControllers addObject:controller];
+  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:self.window kind:self.kind recordID:record[@"id"]]; [self.relatedControllers addObject:controller];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
   if (item.action == @selector(toggleKeepInFront:)) {
