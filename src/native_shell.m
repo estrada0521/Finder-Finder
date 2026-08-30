@@ -213,6 +213,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSPoint startMouse;
 @property(nonatomic) NSRect startFrame;
 @property(nonatomic) BOOL usesLiquidGlass;
+@property(nonatomic, copy) void (^onClick)(void);
 @end
 
 @interface FinderRecordCell : NSTableCellView
@@ -355,6 +356,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   frame.origin.y += now.y - self.startMouse.y;
   [self.window setFrameOrigin:frame.origin];
 }
+- (void)mouseUp:(NSEvent *)event {
+  NSPoint now = NSEvent.mouseLocation;
+  if (self.onClick && hypot(now.x - self.startMouse.x, now.y - self.startMouse.y) < 4.0) self.onClick();
+}
 @end
 
 @implementation FinderRecordRow
@@ -454,6 +459,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 324, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+  __weak FinderRelatedController *weakSelf = self;
+  self.header.onClick = ^{ [weakSelf.table deselectAll:nil]; };
   self.header.titleLabel.stringValue = [NSString stringWithFormat:@"Links · %@", catalog[@"title"] ?: @""];
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 324)];
@@ -654,6 +661,7 @@ static void FinderDatabaseEvents(
   self.header = [[FinderDragHeader alloc] initWithFrame:NSMakeRect(0, 384, 300, FinderHeaderHeight)];
   if (@available(macOS 26.0, *)) self.header.usesLiquidGlass = YES;
   self.header.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+  self.header.onClick = ^{ [weakSelf.table deselectAll:nil]; };
   [content addSubview:self.header];
   self.scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 300, 384)];
   self.scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
