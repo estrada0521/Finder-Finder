@@ -691,6 +691,33 @@ pub extern "C" fn finder_native_payloads_json(kind: *const c_char, ids: *const c
     CString::new(result.unwrap_or_else(|_| "[]".to_string())).unwrap().into_raw()
 }
 
+/// Absolute payload file paths to place on the clipboard for a Copy (Cmd-C).
+/// When Quick Look is showing, the previewed item's payloads win (matches how
+/// `reveal` / `copy` behave); otherwise every payload of every given record id.
+#[no_mangle]
+pub extern "C" fn finder_native_clipboard_files_json(ids: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        let paths: Vec<String> = if let Some(item) = active_ql_item() {
+            item.payloads.iter().map(|path| path.to_string_lossy().to_string()).collect()
+        } else {
+            let root = PathBuf::from(db_root()?);
+            native_ids(ids)
+                .iter()
+                .map(|id| find_payloads(&root, id))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect()
+        };
+        serde_json::to_string(&paths).map_err(|err| err.to_string())
+    })();
+    if let Err(err) = &result {
+        eprintln!("[finder-finder-native] copy files: {err}");
+    }
+    CString::new(result.unwrap_or_else(|_| "[]".to_string())).unwrap().into_raw()
+}
+
 #[no_mangle]
 pub extern "C" fn finder_native_create_record(category: *const c_char, name: *const c_char, paths: *const c_char) -> *mut c_char {
     let result = (|| -> Result<String, String> {

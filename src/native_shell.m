@@ -6,6 +6,7 @@ extern char *finder_native_catalog_json(void);
 extern char *finder_native_db_root(void);
 extern char *finder_native_related_json(const char *kind, const char *id);
 extern char *finder_native_payloads_json(const char *kind, const char *ids);
+extern char *finder_native_clipboard_files_json(const char *ids);
 extern char *finder_native_create_record(const char *category, const char *name, const char *paths);
 extern void finder_native_free_string(char *value);
 extern void finder_native_action(const char *kind, const char *ids, const char *action);
@@ -34,8 +35,38 @@ static NSArray<NSURL *> *FinderDroppedFileURLs(id<NSDraggingInfo> info) {
   return [info.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{ NSPasteboardURLReadingFileURLsOnlyKey: @YES }] ?: @[];
 }
 
+// A drag this app started (payload drag out of a table) carries a non-nil
+// draggingSource; a file drag from Finder does not. Dropping our own drag back
+// onto the app must not create a record.
+static BOOL FinderDragIsInternal(id<NSDraggingInfo> info) {
+  return info.draggingSource != nil;
+}
+
 static NSDragOperation FinderPayloadDropOperation(id<NSDraggingInfo> info) {
+  if (FinderDragIsInternal(info)) return NSDragOperationNone;
   return FinderDroppedFileURLs(info).count ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+// Cmd-C: put the payload file(s) themselves on the general pasteboard so they
+// paste into Finder / Mail / Slack etc. Multiple selected records and records
+// with multiple payloads all contribute their files. During Quick Look the
+// previewed item's payload wins (Rust decides via finder_native_clipboard_files_json).
+static BOOL FinderCopyPayloadFiles(NSArray<NSString *> *ids) {
+  NSData *request = [NSJSONSerialization dataWithJSONObject:(ids ?: @[]) options:0 error:nil];
+  NSString *json = [[NSString alloc] initWithData:request encoding:NSUTF8StringEncoding] ?: @"[]";
+  char *raw = finder_native_clipboard_files_json(json.UTF8String);
+  NSData *response = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
+  if (raw) finder_native_free_string(raw);
+  NSArray *paths = response ? [NSJSONSerialization JSONObjectWithData:response options:0 error:nil] : nil;
+  if (![paths isKindOfClass:NSArray.class]) return NO;
+  NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+  for (id path in paths) {
+    if ([path isKindOfClass:NSString.class] && [path length]) [urls addObject:[NSURL fileURLWithPath:path]];
+  }
+  if (!urls.count) return NO;
+  NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+  [pasteboard clearContents];
+  return [pasteboard writeObjects:urls];
 }
 
 static NSArray<NSURL *> *FinderPayloadURLs(NSString *kind, NSArray<NSString *> *ids) {
@@ -138,6 +169,7 @@ static void FinderConfigureWindow(NSWindow *window) {
 }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  if (FinderDragIsInternal(sender)) return NO;
   return [self acceptFileDrop:FinderDroppedFileURLs(sender)];
 }
 - (BOOL)acceptFileDrop:(NSArray<NSURL *> *)urls { return urls.count && self.onFileDrop ? self.onFileDrop(urls) : NO; }
@@ -209,6 +241,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic, copy) NSString *seedID;
 - (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent kind:(NSString *)kind recordID:(NSString *)recordID;
 - (void)refreshFromDatabase;
+- (void)openSelected;
+- (void)quickLookSelected;
+- (void)actOnSelected:(NSString *)action;
+- (void)copyPayloadFilesToPasteboard;
 @end
 
 @interface FinderRelatedTable : NSTableView
@@ -267,7 +303,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { if (FinderDragIsInternal(sender)) return NO; return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
 @implementation FinderResizeGrip
@@ -467,6 +503,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   return FinderPayloadDropOperation(info);
 }
 - (BOOL)tableView:(NSTableView *)tableView acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)row dropOperation:(NSTableViewDropOperation)dropOperation {
+  if (FinderDragIsInternal(info)) return NO;
   return [(id)tableView.window.contentView acceptFileDrop:FinderDroppedFileURLs(info)];
 }
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
@@ -537,6 +574,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     finder_native_action(kind.UTF8String, json.UTF8String, action.UTF8String);
   }
 }
+- (void)copyPayloadFilesToPasteboard {
+  NSMutableArray<NSString *> *ids = [NSMutableArray array];
+  [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
+    (void)stop;
+    NSString *recordId = self.items[row][@"id"];
+    if (recordId.length) [ids addObject:recordId];
+  }];
+  FinderCopyPayloadFiles(ids);
+}
 @end
 
 @implementation FinderRelatedTable
@@ -565,7 +611,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { if (FinderDragIsInternal(sender)) return NO; return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
 static void FinderDatabaseEvents(
@@ -718,6 +764,8 @@ static void FinderDatabaseEvents(
   [file addItemWithTitle:@"Reveal in Finder" action:@selector(reveal:) keyEquivalent:@"f"];
   NSMenuItem *openQuickLook = [file addItemWithTitle:@"Open Quick Look Original" action:@selector(openQuickLookOriginal:) keyEquivalent:@"o"];
   openQuickLook.target = self;
+  NSMenuItem *copyFiles = [file addItemWithTitle:@"Copy" action:@selector(copyPayloadFiles:) keyEquivalent:@"c"];
+  copyFiles.target = self;
   NSMenuItem *copyRelativePath = [file addItemWithTitle:@"Copy Relative Path" action:@selector(copyRelative:) keyEquivalent:@"p"];
   copyRelativePath.target = self;
   NSMenuItem *copyPath = [file addItemWithTitle:@"Copy Full Path" action:@selector(copy:) keyEquivalent:@"p"];
@@ -856,6 +904,7 @@ static void FinderDatabaseEvents(
   return FinderPayloadDropOperation(info);
 }
 - (BOOL)tableView:(NSTableView *)tableView acceptDrop:(id<NSDraggingInfo>)info row:(NSInteger)row dropOperation:(NSTableViewDropOperation)dropOperation {
+  if (FinderDragIsInternal(info)) return NO;
   return [(id)tableView.window.contentView acceptFileDrop:FinderDroppedFileURLs(info)];
 }
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
@@ -886,13 +935,36 @@ static void FinderDatabaseEvents(
   NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
   finder_native_action(self.kind.UTF8String, json.UTF8String, action.UTF8String);
 }
+// Menu items are hard-targeted at this controller, so a menu command issued
+// while a Links window is key must be forwarded to that window's controller.
+- (FinderRelatedController *)keyRelatedController {
+  NSWindow *key = NSApp.keyWindow ?: lastKeyWindow;
+  if (!key || key == self.window) return nil;
+  for (FinderRelatedController *controller in self.relatedControllers)
+    if (controller.window == key) return controller;
+  return nil;
+}
+- (void)routeAction:(NSString *)action {
+  FinderRelatedController *related = [self keyRelatedController];
+  if (related) { [related actOnSelected:action]; return; }
+  [self act:action];
+}
 - (void)tableView:(NSTableView *)tableView didDoubleClickRow:(NSInteger)row { [self act:@"open"]; }
-- (void)quickLook:(id)sender { [self act:@"quicklook"]; }
-- (void)open:(id)sender { [self act:@"open"]; }
-- (void)metadata:(id)sender { [self act:@"metadata"]; }
-- (void)reveal:(id)sender { [self act:@"reveal"]; }
-- (void)copy:(id)sender { [self act:@"copy"]; }
-- (void)copyRelative:(id)sender { [self act:@"copy-relative"]; }
+- (void)quickLook:(id)sender {
+  FinderRelatedController *related = [self keyRelatedController];
+  if (related) { [related quickLookSelected]; return; }
+  [self act:@"quicklook"];
+}
+- (void)open:(id)sender { [self routeAction:@"open"]; }
+- (void)metadata:(id)sender { [self routeAction:@"metadata"]; }
+- (void)reveal:(id)sender { [self routeAction:@"reveal"]; }
+- (void)copy:(id)sender { [self routeAction:@"copy"]; }
+- (void)copyRelative:(id)sender { [self routeAction:@"copy-relative"]; }
+- (void)copyPayloadFiles:(id)sender {
+  FinderRelatedController *related = [self keyRelatedController];
+  if (related) { [related copyPayloadFilesToPasteboard]; return; }
+  FinderCopyPayloadFiles(self.selectedIds);   // ids ignored by Rust while Quick Look is up
+}
 - (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
 - (void)closeWindow:(id)sender {
   NSWindow *window = NSApp.orderedWindows.firstObject ?: lastKeyWindow ?: self.window;
@@ -904,13 +976,18 @@ static void FinderDatabaseEvents(
   window.level = window.level == NSFloatingWindowLevel ? NSNormalWindowLevel : NSFloatingWindowLevel;
 }
 - (void)renameSelected:(id)sender {
-  if (self.table.selectedRowIndexes.count != 1) return;
-  NSDictionary *record = self.records[(NSUInteger)self.table.selectedRow];
+  FinderRelatedController *related = [self keyRelatedController];
+  NSTableView *table = related ? related.table : self.table;
+  NSArray *rows = related ? related.items : self.records;
+  if (table.selectedRowIndexes.count != 1) return;
+  NSDictionary *record = rows[(NSUInteger)table.selectedRow];
+  NSString *kind = related ? record[@"kind"] : self.kind;
+  if (!kind.length || !record[@"id"]) return;
   NSAlert *alert = [NSAlert new]; alert.messageText = @"Rename"; alert.informativeText = @"Display name";
   NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)]; field.stringValue = record[@"title"] ?: record[@"id"] ?: @""; alert.accessoryView = field;
   [alert addButtonWithTitle:@"Rename"]; [alert addButtonWithTitle:@"Cancel"];
   if ([alert runModal] != NSAlertFirstButtonReturn) return;
-  if (finder_native_rename(self.kind.UTF8String, [record[@"id"] UTF8String], field.stringValue.UTF8String)) [self loadCatalog];
+  if (finder_native_rename(kind.UTF8String, [record[@"id"] UTF8String], field.stringValue.UTF8String)) [self refreshCatalogPreservingState];
 }
 - (void)windowDidBecomeKey:(NSNotification *)notification { lastKeyWindow = self.window; }
 - (void)windowDidResize:(NSNotification *)notification {
@@ -921,14 +998,27 @@ static void FinderDatabaseEvents(
   self.table.tableColumns.firstObject.width = width;
   [self.table reloadData];
 }
+- (void)openRelatedForKind:(NSString *)kind recordID:(NSString *)recordID parent:(NSWindow *)parent {
+  if (!kind.length || !recordID.length) return;
+  char *raw = finder_native_related_json(kind.UTF8String, recordID.UTF8String);
+  NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
+  NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
+  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:parent kind:kind recordID:recordID]; [self.relatedControllers addObject:controller];
+}
 - (void)openRelated:(id)sender {
+  FinderRelatedController *related = [self keyRelatedController];
+  if (related) {
+    NSInteger row = related.table.selectedRow;
+    if (row < 0 || row >= (NSInteger)related.items.count) return;
+    NSDictionary *item = related.items[(NSUInteger)row];
+    [self openRelatedForKind:item[@"kind"] recordID:item[@"id"] parent:related.window];
+    return;
+  }
   if (NSApp.orderedWindows.firstObject != self.window) return;
   NSInteger row = self.table.selectedRow >= 0 ? self.table.selectedRow : self.table.hoveredRow;
   if (row < 0 || row >= (NSInteger)self.records.count) return;
-  NSDictionary *record = self.records[(NSUInteger)row]; char *raw = finder_native_related_json(self.kind.UTF8String, [record[@"id"] UTF8String]);
-  NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
-  NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
-  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:self.window kind:self.kind recordID:record[@"id"]]; [self.relatedControllers addObject:controller];
+  NSDictionary *record = self.records[(NSUInteger)row];
+  [self openRelatedForKind:self.kind recordID:record[@"id"] parent:self.window];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
   if (item.action == @selector(toggleKeepInFront:)) {
@@ -937,8 +1027,14 @@ static void FinderDatabaseEvents(
     return YES;
   }
   if (item.action == @selector(openRelated:)) {
+    FinderRelatedController *related = [self keyRelatedController];
+    if (related) return related.table.selectedRow >= 0;
     return NSApp.orderedWindows.firstObject == self.window
         && (self.table.selectedRow >= 0 || self.table.hoveredRow >= 0);
+  }
+  if (item.action == @selector(copyPayloadFiles:)) {
+    // Let a modal (the Rename dialog) keep Cmd-C for its text field.
+    return NSApp.modalWindow == nil;
   }
   return YES;
 }
