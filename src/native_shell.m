@@ -609,9 +609,17 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   if (row < 0 || (NSUInteger)row >= self.items.count) return nil;
   NSDictionary *item = self.items[(NSUInteger)row];
   NSMenu *menu = [[NSMenu alloc] init];
+  menu.showsStateColumn = NO;
+  menu.minimumWidth = 190;
   NSMenuItem *remove = [menu addItemWithTitle:@"Remove Link" action:@selector(removeLinkForContextRow:) keyEquivalent:@""];
   remove.target = self;
   remove.representedObject = item[@"id"];
+  NSMutableParagraphStyle *centered = [NSMutableParagraphStyle new];
+  centered.alignment = NSTextAlignmentCenter;
+  remove.attributedTitle = [[NSAttributedString alloc]
+      initWithString:@"Remove Link"
+          attributes:@{NSParagraphStyleAttributeName : centered,
+                       NSFontAttributeName : [NSFont menuFontOfSize:0]}];
   return menu;
 }
 - (void)removeLinkForContextRow:(NSMenuItem *)sender {
@@ -700,6 +708,7 @@ static void FinderDatabaseEvents(
 @implementation FinderNativeController
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }
 - (void)applicationDidBecomeActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 - (void)applicationDidResignActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 
