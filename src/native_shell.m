@@ -271,10 +271,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSMutableArray *relatedControllers;
 @property(nonatomic) FSEventStreamRef databaseEvents;
 @property(nonatomic) BOOL catalogRefreshScheduled;
+// letter -> category kind, from the Category menu's Option shortcuts.
+@property(nonatomic) NSDictionary<NSString *, NSString *> *categoryShortcuts;
+@property(nonatomic) id categoryKeyMonitor;
 - (void)setupMainWindow;
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
 - (void)scheduleCatalogRefresh;
 - (void)refreshCatalogPreservingState;
+- (void)installCategoryKeyMonitor;
+- (BOOL)switchToCategoryForShortcut:(NSString *)letter;
 @end
 
 @implementation FinderNativeTable
@@ -769,12 +774,38 @@ static void FinderDatabaseEvents(
   }
   [self loadCatalog];
   [self installMenu];
+  [self installCategoryKeyMonitor];
   [self startWatchingDatabase];
   [self.window makeKeyAndOrderFront:nil];
   [NSApp activateIgnoringOtherApps:YES];
 }
 
+// Option+<letter> as an NSMenu key equivalent is unreliable: Option composes an
+// accented character and dead keys (Option-e/i/n/u) never match, so the stroke
+// leaks to the table's type-select. Catch it before dispatch instead, resolving
+// the base letter with charactersByApplyingModifiers: so dead keys still work.
+- (void)installCategoryKeyMonitor {
+  __weak FinderNativeController *weakSelf = self;
+  self.categoryKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                                 handler:^NSEvent *(NSEvent *event) {
+    FinderNativeController *controller = weakSelf;
+    if (!controller) return event;
+    if ((event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) != NSEventModifierFlagOption)
+      return event;
+    if (NSApp.keyWindow != controller.window) return event;
+    id responder = controller.window.firstResponder;
+    if ([responder isKindOfClass:[NSText class]] || [responder isKindOfClass:[NSTextView class]])
+      return event;
+    NSString *letter = nil;
+    if (@available(macOS 10.15, *)) letter = [event charactersByApplyingModifiers:0];
+    if (!letter.length) letter = event.charactersIgnoringModifiers;
+    if (letter.length == 1 && [controller switchToCategoryForShortcut:letter]) return nil;
+    return event;
+  }];
+}
+
 - (void)dealloc {
+  if (self.categoryKeyMonitor) [NSEvent removeMonitor:self.categoryKeyMonitor];
   if (self.databaseEvents) {
     FSEventStreamStop(self.databaseEvents);
     FSEventStreamInvalidate(self.databaseEvents);
@@ -865,6 +896,7 @@ static void FinderDatabaseEvents(
   NSMenuItem *categoryItem = [NSMenuItem new]; [bar addItem:categoryItem];
   NSMenu *categories = [[NSMenu alloc] initWithTitle:@"Category"];
   NSMutableSet<NSString *> *usedLetters = [NSMutableSet set];
+  NSMutableDictionary<NSString *, NSString *> *shortcutMap = [NSMutableDictionary dictionary];
   for (NSDictionary *column in self.columns) {
     NSString *kind = column[@"kind"] ?: @"";
     NSString *shortcut = nil;
@@ -877,7 +909,9 @@ static void FinderDatabaseEvents(
     NSMenuItem *item = [categories addItemWithTitle:column[@"label"] ?: kind action:@selector(selectCategory:) keyEquivalent:shortcut ?: @""];
     item.keyEquivalentModifierMask = NSEventModifierFlagOption;
     item.representedObject = kind; item.target = self;
+    if (shortcut) shortcutMap[shortcut] = kind;
   }
+  self.categoryShortcuts = shortcutMap;
   categoryItem.submenu = categories;
 }
 
@@ -975,13 +1009,25 @@ static void FinderDatabaseEvents(
   self.records = column[@"records"] ?: @[];
   [self.table reloadData];
 }
-- (void)selectCategory:(NSMenuItem *)sender {
-  NSString *kind = sender.representedObject;
+- (BOOL)switchToKind:(NSString *)kind {
+  if (!kind.length) return NO;
   NSUInteger index = [self.columns indexOfObjectPassingTest:^BOOL(NSDictionary *column, NSUInteger idx, BOOL *stop) {
     (void)idx; (void)stop;
     return [column[@"kind"] isEqualToString:kind];
   }];
-  if (index != NSNotFound) [self chooseColumn:(NSInteger)index];
+  if (index == NSNotFound) return NO;
+  if (![self.activeKind isEqualToString:kind]) [self chooseColumn:(NSInteger)index];
+  return YES;
+}
+- (void)selectCategory:(NSMenuItem *)sender {
+  [self switchToKind:sender.representedObject];
+}
+// Option+<letter> menu key equivalents do not fire reliably (Option composes an
+// accented character, and dead keys like Option-e never match), so the keystroke
+// falls through to the table's type-select. FinderNativeTable routes it here.
+- (BOOL)switchToCategoryForShortcut:(NSString *)letter {
+  NSString *kind = self.categoryShortcuts[letter.lowercaseString];
+  return kind ? [self switchToKind:kind] : NO;
 }
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return self.records.count; }
 - (NSDragOperation)tableView:(NSTableView *)tableView validateDrop:(id<NSDraggingInfo>)info proposedRow:(NSInteger)row proposedDropOperation:(NSTableViewDropOperation)dropOperation {
