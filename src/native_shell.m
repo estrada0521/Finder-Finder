@@ -11,6 +11,7 @@ extern char *finder_native_create_record(const char *category, const char *name,
 extern void finder_native_free_string(char *value);
 extern void finder_native_action(const char *kind, const char *ids, const char *action);
 extern bool finder_native_rename(const char *kind, const char *id, const char *name);
+extern int finder_native_unlink(const char *seeds, const char *target);
 
 // NSMenu key-equivalent handling can temporarily clear NSApp.keyWindow. Keep
 // the last key window strongly until its close action finishes.
@@ -251,6 +252,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)quickLookSelected;
 - (void)actOnSelected:(NSString *)action;
 - (void)copyPayloadFilesToPasteboard;
+- (NSMenu *)contextMenuForRow:(NSInteger)row;
 @end
 
 @interface FinderRelatedTable : NSTableView
@@ -271,6 +273,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)setupMainWindow;
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
 - (void)scheduleCatalogRefresh;
+- (void)refreshCatalogPreservingState;
 @end
 
 @implementation FinderNativeTable
@@ -602,6 +605,47 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   }];
   FinderCopyPayloadFiles(ids);
 }
+- (NSMenu *)contextMenuForRow:(NSInteger)row {
+  if (row < 0 || (NSUInteger)row >= self.items.count) return nil;
+  NSDictionary *item = self.items[(NSUInteger)row];
+  NSMenu *menu = [[NSMenu alloc] init];
+  NSMenuItem *remove = [menu addItemWithTitle:@"Remove Link" action:@selector(removeLinkForContextRow:) keyEquivalent:@""];
+  remove.target = self;
+  remove.representedObject = item[@"id"];
+  return menu;
+}
+- (void)removeLinkForContextRow:(NSMenuItem *)sender {
+  NSString *targetID = sender.representedObject;
+  if (!targetID.length || !self.seedIDs.count) return;
+  NSDictionary *item = nil;
+  for (NSDictionary *candidate in self.items) {
+    if ([candidate[@"id"] isEqualToString:targetID]) { item = candidate; break; }
+  }
+  NSString *title = [item[@"title"] length] ? item[@"title"] : targetID;
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Remove link?";
+  alert.informativeText = [NSString stringWithFormat:
+      @"This removes the direct link between the source record%@ and “%@”. The records themselves are not deleted.",
+      self.seedIDs.count > 1 ? @"s" : @"", title];
+  [alert addButtonWithTitle:@"Remove"];
+  [alert addButtonWithTitle:@"Cancel"];
+  if ([alert runModal] != NSAlertFirstButtonReturn) return;
+  NSData *seedData = [NSJSONSerialization dataWithJSONObject:self.seedIDs options:0 error:nil];
+  NSString *seedJSON = [[NSString alloc] initWithData:seedData encoding:NSUTF8StringEncoding] ?: @"[]";
+  int removed = finder_native_unlink(seedJSON.UTF8String, targetID.UTF8String);
+  if (removed > 0) {
+    FinderNativeController *app = (FinderNativeController *)NSApp.delegate;
+    [app refreshCatalogPreservingState];
+    return;
+  }
+  NSAlert *note = [[NSAlert alloc] init];
+  note.messageText = removed == 0 ? @"No direct link to remove" : @"Could not remove link";
+  note.informativeText = removed == 0
+      ? @"This record is not linked directly from the source record; it appears here through another record."
+      : @"The metadata could not be updated. See the console for details.";
+  [note addButtonWithTitle:@"OK"];
+  [note runModal];
+}
 @end
 
 @implementation FinderRelatedTable
@@ -627,6 +671,13 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
       return;
     }
   }
+}
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  NSInteger row = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  if (row < 0) return nil;
+  if (![self.selectedRowIndexes containsIndex:(NSUInteger)row])
+    [self selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+  return [self.owner contextMenuForRow:row];
 }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }

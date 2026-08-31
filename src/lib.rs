@@ -13,7 +13,7 @@ unsafe extern "C" {
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -813,6 +813,65 @@ pub extern "C" fn finder_native_rename(kind: *const c_char, id: *const c_char, n
         out.push('\n'); fs::write(path, out).map_err(|err| format!("failed to write metadata: {err}"))
     })();
     if let Err(err) = result { eprintln!("[finder-finder-native] rename: {err}"); false } else { true }
+}
+
+/// Drop from `id`'s `metadata.json` every `links` entry pointing at one of
+/// `targets`. Returns how many entries were removed (0 if none / no metadata).
+fn remove_link_entries(root: &Path, id: &str, targets: &[String]) -> Result<i32, String> {
+    let path = settings::metadata_path(&record_dir(root, id)?);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) => return Ok(0),
+    };
+    let mut value: Value =
+        serde_json::from_str(&text).map_err(|err| format!("invalid metadata {id}: {err}"))?;
+    let object = value.as_object_mut().ok_or("metadata is not a JSON object")?;
+    let Some(Value::Array(links)) = object.get_mut("links") else {
+        return Ok(0);
+    };
+    let before = links.len();
+    links.retain(|entry| {
+        let linked = entry.get("id").and_then(Value::as_str).unwrap_or("");
+        !targets.iter().any(|target| target == linked)
+    });
+    let removed = (before - links.len()) as i32;
+    if removed == 0 {
+        return Ok(0);
+    }
+    let mut out = serde_json::to_string_pretty(&value).map_err(|err| format!("serialize failed: {err}"))?;
+    out.push('\n');
+    fs::write(&path, out).map_err(|err| format!("failed to write metadata: {err}"))?;
+    Ok(removed)
+}
+
+/// Remove the direct link(s) between any of `seeds` and `target`, in either
+/// direction. Returns the number of `links` entries removed, or -1 on error.
+#[no_mangle]
+pub extern "C" fn finder_native_unlink(seeds: *const c_char, target: *const c_char) -> c_int {
+    let result = (|| -> Result<i32, String> {
+        if target.is_null() {
+            return Err("missing unlink target".to_string());
+        }
+        let seed_ids = native_ids(seeds);
+        if seed_ids.is_empty() {
+            return Err("missing unlink seeds".to_string());
+        }
+        let target = unsafe { CStr::from_ptr(target) }.to_string_lossy().into_owned();
+        let root = PathBuf::from(db_root()?);
+        let mut removed = 0;
+        for seed in &seed_ids {
+            removed += remove_link_entries(&root, seed, std::slice::from_ref(&target))?;
+        }
+        removed += remove_link_entries(&root, &target, &seed_ids)?;
+        Ok(removed)
+    })();
+    match result {
+        Ok(removed) => removed,
+        Err(err) => {
+            eprintln!("[finder-finder-native] unlink: {err}");
+            -1
+        }
+    }
 }
 
 #[no_mangle]
