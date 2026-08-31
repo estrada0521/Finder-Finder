@@ -156,6 +156,7 @@ static void FinderConfigureWindow(NSWindow *window) {
   // closed window is freed while its controller still points at it, and the
   // next FSEvents refresh messages the dangling pointer. Let ARC own lifetime.
   window.releasedWhenClosed = NO;
+  window.level = NSFloatingWindowLevel; // "Keep in Front" defaults on
   window.titlebarAppearsTransparent = YES;
   window.titleVisibility = NSWindowTitleHidden;
   [window standardWindowButton:NSWindowCloseButton].hidden = YES;
