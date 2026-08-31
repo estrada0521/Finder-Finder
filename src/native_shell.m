@@ -4,7 +4,7 @@
 
 extern char *finder_native_catalog_json(void);
 extern char *finder_native_db_root(void);
-extern char *finder_native_related_json(const char *ids);
+extern char *finder_native_related_json(const char *ids, bool direct_only);
 extern char *finder_native_payloads_json(const char *kind, const char *ids);
 extern char *finder_native_clipboard_files_json(const char *ids);
 extern char *finder_native_create_record(const char *category, const char *name, const char *paths);
@@ -244,7 +244,8 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSArray *items;
 @property(nonatomic, copy) NSArray<NSString *> *seedIDs;
-- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent seedIDs:(NSArray<NSString *> *)seedIDs;
+@property(nonatomic) BOOL directOnly;
+- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent seedIDs:(NSArray<NSString *> *)seedIDs directOnly:(BOOL)directOnly;
 - (void)refreshFromDatabase;
 - (void)openSelected;
 - (void)quickLookSelected;
@@ -444,9 +445,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderRelatedController
-- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent seedIDs:(NSArray<NSString *> *)seedIDs {
+- (instancetype)initWithCatalog:(NSDictionary *)catalog parent:(NSWindow *)parent seedIDs:(NSArray<NSString *> *)seedIDs directOnly:(BOOL)directOnly {
   if (!(self = [super init])) return nil;
   self.seedIDs = seedIDs;
+  self.directOnly = directOnly;
   self.items = FinderRelatedItems(catalog);
   self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(parent.frame.origin.x + 28, parent.frame.origin.y + 28, 300, 360) styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
   FinderConfigureWindow(self.window);
@@ -493,7 +495,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   }];
   NSData *seedData = [NSJSONSerialization dataWithJSONObject:self.seedIDs options:0 error:nil];
   NSString *seedJSON = [[NSString alloc] initWithData:seedData encoding:NSUTF8StringEncoding] ?: @"[]";
-  char *raw = finder_native_related_json(seedJSON.UTF8String);
+  char *raw = finder_native_related_json(seedJSON.UTF8String, self.directOnly);
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil;
   if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
@@ -794,6 +796,10 @@ static void FinderDatabaseEvents(
   NSMenu *link = [[NSMenu alloc] initWithTitle:@"Link"];
   NSMenuItem *related = [link addItemWithTitle:@"Open Related" action:@selector(openRelated:) keyEquivalent:@"e"];
   related.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+  related.target = self;
+  NSMenuItem *relatedDirect = [link addItemWithTitle:@"Open Direct Links" action:@selector(openRelatedDirect:) keyEquivalent:@"e"];
+  relatedDirect.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+  relatedDirect.target = self;
   linkItem.submenu = link;
   NSMenuItem *categoryItem = [NSMenuItem new]; [bar addItem:categoryItem];
   NSMenu *categories = [[NSMenu alloc] initWithTitle:@"Category"];
@@ -1016,25 +1022,25 @@ static void FinderDatabaseEvents(
   self.table.tableColumns.firstObject.width = width;
   [self.table reloadData];
 }
-- (void)openRelatedForIDs:(NSArray<NSString *> *)ids parent:(NSWindow *)parent {
+- (void)openRelatedForIDs:(NSArray<NSString *> *)ids parent:(NSWindow *)parent directOnly:(BOOL)directOnly {
   NSMutableArray<NSString *> *seeds = [NSMutableArray array];
   for (NSString *seed in ids) if (seed.length) [seeds addObject:seed];
   if (!seeds.count) return;
   NSData *seedData = [NSJSONSerialization dataWithJSONObject:seeds options:0 error:nil];
   NSString *seedJSON = [[NSString alloc] initWithData:seedData encoding:NSUTF8StringEncoding] ?: @"[]";
-  char *raw = finder_native_related_json(seedJSON.UTF8String);
+  char *raw = finder_native_related_json(seedJSON.UTF8String, directOnly);
   NSData *data = raw ? [NSData dataWithBytes:raw length:strlen(raw)] : nil; if (raw) finder_native_free_string(raw);
   NSDictionary *catalog = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil; if (!catalog || catalog[@"error"]) return;
-  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:parent seedIDs:seeds]; [self.relatedControllers addObject:controller];
+  FinderRelatedController *controller = [[FinderRelatedController alloc] initWithCatalog:catalog parent:parent seedIDs:seeds directOnly:directOnly]; [self.relatedControllers addObject:controller];
 }
-- (void)openRelated:(id)sender {
+- (void)openRelatedWithDirectOnly:(BOOL)directOnly {
   FinderRelatedController *related = [self keyRelatedController];
   if (related) {
     NSMutableArray<NSString *> *ids = [NSMutableArray array];
     [related.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
       (void)stop; NSString *rid = related.items[row][@"id"]; if (rid.length) [ids addObject:rid];
     }];
-    [self openRelatedForIDs:ids parent:related.window];
+    [self openRelatedForIDs:ids parent:related.window directOnly:directOnly];
     return;
   }
   if (NSApp.orderedWindows.firstObject != self.window) return;
@@ -1043,15 +1049,17 @@ static void FinderDatabaseEvents(
     NSString *rid = self.records[(NSUInteger)self.table.hoveredRow][@"id"];
     if (rid.length) ids = @[ rid ];
   }
-  [self openRelatedForIDs:ids parent:self.window];
+  [self openRelatedForIDs:ids parent:self.window directOnly:directOnly];
 }
+- (void)openRelated:(id)sender { [self openRelatedWithDirectOnly:NO]; }
+- (void)openRelatedDirect:(id)sender { [self openRelatedWithDirectOnly:YES]; }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
   if (item.action == @selector(toggleKeepInFront:)) {
     NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
     item.state = window.level == NSFloatingWindowLevel ? NSControlStateValueOn : NSControlStateValueOff;
     return YES;
   }
-  if (item.action == @selector(openRelated:)) {
+  if (item.action == @selector(openRelated:) || item.action == @selector(openRelatedDirect:)) {
     FinderRelatedController *related = [self keyRelatedController];
     if (related) return related.table.selectedRow >= 0;
     return NSApp.orderedWindows.firstObject == self.window

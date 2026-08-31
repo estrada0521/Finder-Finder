@@ -12,7 +12,7 @@ unsafe extern "C" {
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
 use std::io::Write;
@@ -263,55 +263,68 @@ fn build_graph(root: &Path) -> Result<(HashMap<NodeKey, RecordEntry>, Vec<(NodeK
     Ok((nodes, edges))
 }
 
-/// How far provenance traversal walks in either direction from a seed.
+/// How far the related walk reaches from a seed.
 const PROVENANCE_HOPS: usize = 3;
 
-/// Records within `PROVENANCE_HOPS` of `seed`, walking `links` edges without
-/// ever reversing direction inside a path. Forward edges (toward raw data) and
-/// reverse edges (toward derived work) are explored as two separate monotone
-/// BFS traversals, so e.g. `Data -> Rawdata -> sibling Data` never happens.
-/// Returns each reachable record's hop distance (min over both directions);
-/// `seed` itself is excluded.
-fn provenance_distances(seed: &NodeKey, edges: &[(NodeKey, NodeKey)]) -> HashMap<NodeKey, usize> {
-    let mut forward: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
-    let mut reverse: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
+/// Records within `PROVENANCE_HOPS` of `seed`, following `links` in either
+/// direction. Consecutive records of the same category are fine
+/// (`Build -> Build -> Analysis -> ...`), but once a path moves *off* a
+/// category it may not return to it: `Build -> Analysis -> Build` and
+/// `Data -> Rawdata -> Data` are both cut. Because a path has left nothing
+/// behind at hop 1, the seed's own direct references always come through.
+/// Categories are the opaque `category` label of each record -- no particular
+/// category is named or special-cased. `seed` is excluded from the result.
+fn provenance_distances(
+    seed: &NodeKey,
+    edges: &[(NodeKey, NodeKey)],
+    category_of: &HashMap<NodeKey, String>,
+) -> HashMap<NodeKey, usize> {
+    let mut adj: HashMap<NodeKey, Vec<NodeKey>> = HashMap::new();
     for (from, to) in edges {
-        forward.entry(from.clone()).or_default().push(to.clone());
-        reverse.entry(to.clone()).or_default().push(from.clone());
+        adj.entry(from.clone()).or_default().push(to.clone());
+        adj.entry(to.clone()).or_default().push(from.clone());
     }
+    let category = |key: &NodeKey| category_of.get(key).cloned().unwrap_or_default();
 
+    // Every path from the seed is explored independently: the "categories left
+    // behind" set belongs to a branch, not to a record, so one branch pruning a
+    // category never constrains another. Bounded by PROVENANCE_HOPS, so the path
+    // count stays small.
     let mut dist: HashMap<NodeKey, usize> = HashMap::new();
-    for adj in [&forward, &reverse] {
-        let mut seen: HashMap<NodeKey, usize> = HashMap::new();
-        seen.insert(seed.clone(), 0);
-        let mut queue = VecDeque::new();
-        queue.push_back(seed.clone());
-        while let Some(node) = queue.pop_front() {
-            let hop = seen[&node];
-            if hop == PROVENANCE_HOPS {
-                continue;
-            }
-            for next in adj.get(&node).into_iter().flatten() {
-                if seen.contains_key(next) {
-                    continue;
-                }
-                seen.insert(next.clone(), hop + 1);
-                queue.push_back(next.clone());
-            }
-        }
-        for (node, hop) in seen {
-            if node == *seed {
-                continue;
-            }
-            dist.entry(node)
-                .and_modify(|existing| *existing = (*existing).min(hop))
+    let mut stack: Vec<(NodeKey, usize, HashSet<String>, HashSet<NodeKey>)> =
+        vec![(seed.clone(), 0, HashSet::new(), HashSet::from([seed.clone()]))];
+    while let Some((node, hop, departed, on_path)) = stack.pop() {
+        if &node != seed {
+            dist.entry(node.clone())
+                .and_modify(|d| *d = (*d).min(hop))
                 .or_insert(hop);
         }
+        if hop == PROVENANCE_HOPS {
+            continue;
+        }
+        let node_category = category(&node);
+        for next in adj.get(&node).into_iter().flatten() {
+            if on_path.contains(next) {
+                continue;
+            }
+            let next_category = category(next);
+            let mut next_departed = departed.clone();
+            if !next_category.is_empty() && next_category != node_category {
+                if departed.contains(&next_category) {
+                    continue; // returning to a category this branch already left
+                }
+                next_departed.insert(node_category.clone());
+            }
+            let mut next_on_path = on_path.clone();
+            next_on_path.insert(next.clone());
+            stack.push((next.clone(), hop + 1, next_departed, next_on_path));
+        }
     }
+    dist.remove(seed);
     dist
 }
 
-fn list_related(ids: Vec<String>) -> Result<RelatedCatalog, String> {
+fn list_related(ids: Vec<String>, direct_only: bool) -> Result<RelatedCatalog, String> {
     let folders = present_folders()?;
     let root = PathBuf::from(db_root()?);
     let (nodes, edges) = build_graph(&root)?;
@@ -323,22 +336,43 @@ fn list_related(ids: Vec<String>) -> Result<RelatedCatalog, String> {
     let seed_set: HashSet<&String> = seeds.iter().collect();
 
     let mut distances: HashMap<NodeKey, usize> = HashMap::new();
-    for seed in &seeds {
-        for (node, hop) in provenance_distances(seed, &edges) {
-            if seed_set.contains(&node) {
-                continue;
+    if direct_only {
+        // Just the records a seed names in `links`, and the records that name a
+        // seed -- an audit view of what each seed is directly wired to.
+        for (from, to) in &edges {
+            if seed_set.contains(from) && !seed_set.contains(to) {
+                distances.entry(to.clone()).or_insert(1);
             }
-            distances
-                .entry(node)
-                .and_modify(|existing| *existing = (*existing).min(hop))
-                .or_insert(hop);
+            if seed_set.contains(to) && !seed_set.contains(from) {
+                distances.entry(from.clone()).or_insert(1);
+            }
+        }
+    } else {
+        let category_of: HashMap<NodeKey, String> = nodes
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.kind.clone()))
+            .collect();
+        for seed in &seeds {
+            for (node, hop) in provenance_distances(seed, &edges, &category_of) {
+                if seed_set.contains(&node) {
+                    continue;
+                }
+                distances
+                    .entry(node)
+                    .and_modify(|existing| *existing = (*existing).min(hop))
+                    .or_insert(hop);
+            }
         }
     }
 
+    let prefix = if direct_only { "Direct links" } else { "Links" };
     let (title, header) = if seeds.len() == 1 {
         let t = nodes[&seeds[0]].title.clone();
-        let h = format!("Links · {t}");
+        let h = format!("{prefix} · {t}");
         (t, h)
+    } else if direct_only {
+        let t = format!("{} records", seeds.len());
+        (t.clone(), format!("{prefix} · {t}"))
     } else {
         (
             format!("{} records", seeds.len()),
@@ -684,13 +718,13 @@ pub extern "C" fn finder_native_db_root() -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn finder_native_related_json(ids: *const c_char) -> *mut c_char {
+pub extern "C" fn finder_native_related_json(ids: *const c_char, direct_only: bool) -> *mut c_char {
     let result = (|| -> Result<String, String> {
         let ids = native_ids(ids);
         if ids.is_empty() {
             return Err("missing related seed".to_string());
         }
-        let related = list_related(ids)?;
+        let related = list_related(ids, direct_only)?;
         serde_json::to_string(&related).map_err(|err| err.to_string())
     })();
     CString::new(result.unwrap_or_else(|err| serde_json::json!({ "error": err }).to_string())).unwrap().into_raw()
@@ -859,41 +893,76 @@ pub extern "C" fn finder_native_action(kind: *const c_char, ids: *const c_char, 
 #[cfg(test)]
 mod tests {
     use super::{provenance_distances, PROVENANCE_HOPS};
+    use std::collections::HashMap;
 
-    #[test]
-    fn provenance_walks_each_direction_without_folding_back() {
-        // build -> analysis -> data -> rawdata -> sample
-        // data2 -> rawdata  (a sibling Data sharing the same Rawdata)
-        let edges = vec![
-            ("build".to_string(), "analysis".to_string()),
-            ("analysis".to_string(), "data".to_string()),
-            ("data".to_string(), "rawdata".to_string()),
-            ("data2".to_string(), "rawdata".to_string()),
-            ("rawdata".to_string(), "sample".to_string()),
-        ];
-        let d = provenance_distances(&"data".to_string(), &edges);
-        // downstream (following forward edges)
-        assert_eq!(d.get("rawdata"), Some(&1));
-        assert_eq!(d.get("sample"), Some(&2));
-        // upstream (following reverse edges)
-        assert_eq!(d.get("analysis"), Some(&1));
-        assert_eq!(d.get("build"), Some(&2));
-        // no fold-back: the sibling Data reached only via Rawdata must not appear
-        assert!(!d.contains_key("data2"));
-        assert!(!d.contains_key("data"));
+    fn edges(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+    fn cats(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, c)| (k.to_string(), c.to_string())).collect()
     }
 
     #[test]
-    fn provenance_stops_at_the_hop_limit() {
+    fn related_view_may_stay_in_a_category_but_not_return_to_it() {
+        // b0(build) - b1(build) - an(analysis) - b2(build)
+        let e = edges(&[("b0", "b1"), ("b1", "an"), ("an", "b2")]);
+        let c = cats(&[("b0", "build"), ("b1", "build"), ("an", "analysis"), ("b2", "build")]);
+        let r = provenance_distances(&"b0".to_string(), &e, &c);
+        assert_eq!(r.get("b1"), Some(&1)); // Build -> Build is fine
+        assert_eq!(r.get("an"), Some(&2)); // ... -> Analysis is fine
+        assert!(!r.contains_key("b2")); // ... -> Build again: returning is not
+    }
+
+    #[test]
+    fn related_view_cuts_a_fold_back() {
+        // d0(data) - r(rawdata) - d1(data)
+        let e = edges(&[("d0", "r"), ("r", "d1")]);
+        let c = cats(&[("d0", "data"), ("r", "rawdata"), ("d1", "data")]);
+        let r = provenance_distances(&"d0".to_string(), &e, &c);
+        assert_eq!(r.get("r"), Some(&1));
+        assert!(!r.contains_key("d1"));
+    }
+
+    #[test]
+    fn related_view_keeps_a_direct_reference_of_the_seed_category() {
+        // seed and its direct link share a category -> still shown (hop 1)
+        let e = edges(&[("s", "x")]);
+        let c = cats(&[("s", "build"), ("x", "build")]);
+        let r = provenance_distances(&"s".to_string(), &e, &c);
+        assert_eq!(r.get("x"), Some(&1));
+    }
+
+    #[test]
+    fn one_branch_pruning_a_category_does_not_constrain_another() {
+        // build -> an_a, an_b ; an_a -> dat ; an_b -> dat -> deeper
+        let e = edges(&[
+            ("build", "an_a"),
+            ("build", "an_b"),
+            ("an_a", "dat"),
+            ("an_b", "dat"),
+            ("dat", "deeper"),
+        ]);
+        let c = cats(&[
+            ("build", "build"),
+            ("an_a", "analysis"),
+            ("an_b", "analysis"),
+            ("dat", "data"),
+            ("deeper", "rawdata"),
+        ]);
+        let r = provenance_distances(&"build".to_string(), &e, &c);
+        // dat is reached from both analyses; it is not dropped because one
+        // branch already used it
+        assert_eq!(r.get("dat"), Some(&2));
+        assert_eq!(r.get("deeper"), Some(&3));
+    }
+
+    #[test]
+    fn related_view_stops_at_the_hop_limit() {
         assert_eq!(PROVENANCE_HOPS, 3);
-        let edges = vec![
-            ("a".to_string(), "b".to_string()),
-            ("b".to_string(), "c".to_string()),
-            ("c".to_string(), "d".to_string()),
-            ("d".to_string(), "e".to_string()),
-        ];
-        let d = provenance_distances(&"a".to_string(), &edges);
-        assert_eq!(d.get("d"), Some(&3));
-        assert!(!d.contains_key("e"));
+        let e = edges(&[("a", "b"), ("b", "c"), ("c", "d"), ("d", "z")]);
+        let c = cats(&[("a", "0"), ("b", "1"), ("c", "2"), ("d", "3"), ("z", "4")]);
+        let r = provenance_distances(&"a".to_string(), &e, &c);
+        assert_eq!(r.get("d"), Some(&3));
+        assert!(!r.contains_key("z"));
     }
 }
