@@ -7,3 +7,5 @@ build/
 target/
 .env
 .env.*
+
+AGENTS.md
