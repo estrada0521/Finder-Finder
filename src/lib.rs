@@ -47,6 +47,32 @@ struct RecordEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
     kind: String,
+    /// Newest mtime (unix seconds) among the record's non-hidden files; for the
+    /// "Last Modified" sort. Filesystem only — nothing is written back.
+    mtime: i64,
+    /// Number of `links` entries in metadata; for the "Most Links" sort.
+    links: u32,
+}
+
+/// Newest modification time among a record dir's non-hidden files (unix seconds).
+fn record_mtime(dir: &Path) -> i64 {
+    let mut newest = fs::metadata(dir).ok().and_then(|meta| meta.modified().ok());
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) {
+                if newest.map_or(true, |current| modified > current) {
+                    newest = Some(modified);
+                }
+            }
+        }
+    }
+    newest
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|delta| delta.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn db_root() -> Result<String, String> {
@@ -205,6 +231,12 @@ fn entry_for(dir: &Path) -> RecordEntry {
             .and_then(|paths| paths.first().map(|path| path.to_string_lossy().to_string())),
         preview: preview_path(dir, &meta).map(|path| path.to_string_lossy().to_string()),
         kind: text(meta.get("category")),
+        mtime: record_mtime(dir),
+        links: meta
+            .get("links")
+            .and_then(Value::as_array)
+            .map(|entries| entries.len() as u32)
+            .unwrap_or(0),
     }
 }
 

@@ -274,12 +274,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 // letter -> category kind, from the Category menu's Option shortcuts.
 @property(nonatomic) NSDictionary<NSString *, NSString *> *categoryShortcuts;
 @property(nonatomic) id categoryKeyMonitor;
+// Row order for the main list: "number" (default) / "name" / "modified" / "links".
+@property(nonatomic, copy) NSString *sortMode;
 - (void)setupMainWindow;
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
 - (void)scheduleCatalogRefresh;
 - (void)refreshCatalogPreservingState;
 - (void)installCategoryKeyMonitor;
 - (BOOL)switchToCategoryForShortcut:(NSString *)letter;
+- (NSArray *)recordsSorted:(NSArray *)records;
 @end
 
 @implementation FinderNativeTable
@@ -913,6 +916,52 @@ static void FinderDatabaseEvents(
   }
   self.categoryShortcuts = shortcutMap;
   categoryItem.submenu = categories;
+
+  NSMenuItem *sortItem = [NSMenuItem new]; [bar addItem:sortItem];
+  NSMenu *sortMenu = [[NSMenu alloc] initWithTitle:@"Sort"];
+  for (NSArray<NSString *> *pair in @[@[@"Number", @"number"], @[@"Name", @"name"],
+                                      @[@"Last Modified", @"modified"], @[@"Most Links", @"links"]]) {
+    NSMenuItem *item = [sortMenu addItemWithTitle:pair[0] action:@selector(selectSortMode:) keyEquivalent:@""];
+    item.representedObject = pair[1];
+    item.target = self;
+  }
+  sortItem.submenu = sortMenu;
+}
+
+- (NSArray *)recordsSorted:(NSArray *)records {
+  NSString *mode = self.sortMode ?: @"number";
+  return [records sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+    NSComparisonResult order = NSOrderedSame;
+    if ([mode isEqualToString:@"name"]) {
+      order = [(a[@"title"] ?: @"") localizedCaseInsensitiveCompare:(b[@"title"] ?: @"")];
+    } else if ([mode isEqualToString:@"modified"]) {
+      double ma = [a[@"mtime"] doubleValue], mb = [b[@"mtime"] doubleValue];
+      order = ma > mb ? NSOrderedAscending : (ma < mb ? NSOrderedDescending : NSOrderedSame);
+    } else if ([mode isEqualToString:@"links"]) {
+      NSInteger la = [a[@"links"] integerValue], lb = [b[@"links"] integerValue];
+      order = la > lb ? NSOrderedAscending : (la < lb ? NSOrderedDescending : NSOrderedSame);
+    }
+    if (order == NSOrderedSame) order = [(a[@"id"] ?: @"") compare:(b[@"id"] ?: @"")];
+    return order;
+  }];
+}
+
+- (void)selectSortMode:(NSMenuItem *)sender {
+  NSString *mode = sender.representedObject;
+  if (!mode.length || [mode isEqualToString:(self.sortMode ?: @"number")]) return;
+  self.sortMode = mode;
+  NSArray<NSString *> *selected = self.selectedIds;
+  NSUInteger index = [self.columns indexOfObjectPassingTest:^BOOL(NSDictionary *column, NSUInteger idx, BOOL *stop) {
+    (void)idx; (void)stop;
+    return [column[@"kind"] isEqualToString:self.activeKind];
+  }];
+  if (index != NSNotFound) [self chooseColumn:(NSInteger)index];
+  NSMutableIndexSet *rows = [NSMutableIndexSet indexSet];
+  [self.records enumerateObjectsUsingBlock:^(NSDictionary *record, NSUInteger row, BOOL *stop) {
+    (void)stop;
+    if ([selected containsObject:record[@"id"]]) [rows addIndex:row];
+  }];
+  [self.table selectRowIndexes:rows byExtendingSelection:NO];
 }
 
 - (void)loadCatalog {
@@ -1006,7 +1055,7 @@ static void FinderDatabaseEvents(
   NSDictionary *column = self.columns[(NSUInteger)index];
   self.activeKind = column[@"kind"] ?: @"";
   self.header.titleLabel.stringValue = column[@"label"] ?: self.activeKind;
-  self.records = column[@"records"] ?: @[];
+  self.records = [self recordsSorted:(column[@"records"] ?: @[])];
   [self.table reloadData];
 }
 - (BOOL)switchToKind:(NSString *)kind {
@@ -1175,6 +1224,11 @@ static void FinderDatabaseEvents(
   if (item.action == @selector(copyPayloadFiles:)) {
     // Let a modal (the Rename dialog) keep Cmd-C for its text field.
     return NSApp.modalWindow == nil;
+  }
+  if (item.action == @selector(selectSortMode:)) {
+    item.state = [item.representedObject isEqualToString:(self.sortMode ?: @"number")]
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    return YES;
   }
   return YES;
 }
