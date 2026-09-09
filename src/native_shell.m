@@ -265,6 +265,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)actOnSelected:(NSString *)action;
 - (void)copyPayloadFilesToPasteboard;
 - (NSMenu *)contextMenuForRow:(NSInteger)row;
+- (void)removeLinkForContextRow:(id)sender;  // representedObject id, else the selected row
 @end
 
 @interface FinderRelatedTable : NSTableView
@@ -294,6 +295,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)installCategoryKeyMonitor;
 - (BOOL)switchToCategoryForShortcut:(NSString *)letter;
 - (NSArray *)recordsSorted:(NSArray *)records;
+- (NSMenu *)rowContextMenu;  // per-row actions, shared by both windows' tables
 @end
 
 @implementation FinderNativeTable
@@ -330,6 +332,13 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:self userInfo:nil]];
 }
 - (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  NSInteger row = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  if (row < 0) return nil;
+  if (![self.selectedRowIndexes containsIndex:(NSUInteger)row])
+    [self selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+  return [(FinderNativeController *)self.owner rowContextMenu];
+}
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { if (FinderDragIsInternal(sender)) return NO; return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
@@ -627,23 +636,21 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (NSMenu *)contextMenuForRow:(NSInteger)row {
   if (row < 0 || (NSUInteger)row >= self.items.count) return nil;
-  NSDictionary *item = self.items[(NSUInteger)row];
-  NSMenu *menu = [[NSMenu alloc] init];
-  menu.showsStateColumn = NO;
-  menu.minimumWidth = 190;
-  NSMenuItem *remove = [menu addItemWithTitle:@"Remove Link" action:@selector(removeLinkForContextRow:) keyEquivalent:@""];
+  NSMenu *menu = [(FinderNativeController *)NSApp.delegate rowContextMenu];
+  [menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *remove = [menu addItemWithTitle:@"Remove Link" action:@selector(removeLinkForContextRow:)
+                               keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter]];
+  remove.keyEquivalentModifierMask = NSEventModifierFlagCommand;
   remove.target = self;
-  remove.representedObject = item[@"id"];
-  NSMutableParagraphStyle *centered = [NSMutableParagraphStyle new];
-  centered.alignment = NSTextAlignmentCenter;
-  remove.attributedTitle = [[NSAttributedString alloc]
-      initWithString:@"Remove Link"
-          attributes:@{NSParagraphStyleAttributeName : centered,
-                       NSFontAttributeName : [NSFont menuFontOfSize:0]}];
+  remove.representedObject = self.items[(NSUInteger)row][@"id"];
   return menu;
 }
-- (void)removeLinkForContextRow:(NSMenuItem *)sender {
-  NSString *targetID = sender.representedObject;
+- (void)removeLinkForContextRow:(id)sender {
+  NSString *targetID = [sender isKindOfClass:NSMenuItem.class] ? [sender representedObject] : nil;
+  if (!targetID.length) {
+    NSInteger row = self.table.selectedRow;
+    if (row >= 0 && (NSUInteger)row < self.items.count) targetID = self.items[(NSUInteger)row][@"id"];
+  }
   if (!targetID.length || !self.seedIDs.count) return;
   NSDictionary *item = nil;
   for (NSDictionary *candidate in self.items) {
@@ -883,7 +890,7 @@ static void FinderDatabaseEvents(
   NSMenuItem *rename = [file addItemWithTitle:@"Rename" action:@selector(renameSelected:) keyEquivalent:@"\r"];
   rename.target = self;
   [file addItemWithTitle:@"Reveal in Finder" action:@selector(reveal:) keyEquivalent:@"f"];
-  NSMenuItem *openQuickLook = [file addItemWithTitle:@"Open Quick Look Original" action:@selector(openQuickLookOriginal:) keyEquivalent:@"o"];
+  NSMenuItem *openQuickLook = [file addItemWithTitle:@"Open Payload from Quick Look" action:@selector(openQuickLookOriginal:) keyEquivalent:@"o"];
   openQuickLook.target = self;
   NSMenuItem *copyFiles = [file addItemWithTitle:@"Copy" action:@selector(copyPayloadFiles:) keyEquivalent:@"c"];
   copyFiles.target = self;
@@ -901,6 +908,11 @@ static void FinderDatabaseEvents(
   NSMenuItem *relatedDirect = [link addItemWithTitle:@"Open Direct Links" action:@selector(openRelatedDirect:) keyEquivalent:@"e"];
   relatedDirect.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
   relatedDirect.target = self;
+  [link addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *removeLink = [link addItemWithTitle:@"Remove Link" action:@selector(removeSelectedLink:)
+                                    keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter]];
+  removeLink.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+  removeLink.target = self;
   linkItem.submenu = link;
   NSMenuItem *categoryItem = [NSMenuItem new]; [bar addItem:categoryItem];
   NSMenu *categories = [[NSMenu alloc] initWithTitle:@"Category"];
@@ -1174,6 +1186,37 @@ static void FinderDatabaseEvents(
   FinderCopyPayloadFiles(self.selectedIds);   // ids ignored by Rust while Quick Look is up
 }
 - (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
+- (void)removeSelectedLink:(id)sender {
+  [[self keyRelatedController] removeLinkForContextRow:nil];  // nil -> the Links window's selected row
+}
+// The per-row right-click menu, shared by the main list and the Links window.
+// Items are hard-targeted here; routeAction:/keyRelatedController send them to
+// whichever window is key. Key equivalents are shown as reminders only.
+- (NSMenu *)rowContextMenu {
+  NSMenu *menu = [[NSMenu alloc] init];
+  NSMenuItem *(^add)(NSString *, SEL, NSString *, NSEventModifierFlags) =
+      ^NSMenuItem *(NSString *title, SEL action, NSString *key, NSEventModifierFlags mask) {
+    NSMenuItem *item = [menu addItemWithTitle:title action:action keyEquivalent:key];
+    if (key.length) item.keyEquivalentModifierMask = mask;
+    item.target = self;
+    return item;
+  };
+  NSEventModifierFlags cmd = NSEventModifierFlagCommand;
+  add(@"Open", @selector(open:), @"", 0);
+  add(@"Quick Look", @selector(quickLook:), @"", 0);
+  [menu addItem:[NSMenuItem separatorItem]];
+  add(@"Open Metadata", @selector(metadata:), @"j", cmd);
+  add(@"Reveal in Finder", @selector(reveal:), @"f", cmd);
+  add(@"Rename", @selector(renameSelected:), @"\r", cmd);
+  [menu addItem:[NSMenuItem separatorItem]];
+  add(@"Copy", @selector(copyPayloadFiles:), @"c", cmd);
+  add(@"Copy Relative Path", @selector(copyRelative:), @"p", cmd);
+  add(@"Copy Full Path", @selector(copy:), @"p", cmd | NSEventModifierFlagOption);
+  [menu addItem:[NSMenuItem separatorItem]];
+  add(@"Open Related", @selector(openRelated:), @"e", cmd);
+  add(@"Open Direct Links", @selector(openRelatedDirect:), @"e", cmd | NSEventModifierFlagOption);
+  return menu;
+}
 - (void)closeWindow:(id)sender {
   NSWindow *window = NSApp.orderedWindows.firstObject ?: lastKeyWindow ?: self.window;
   lastKeyWindow = nil;
@@ -1277,6 +1320,16 @@ static void FinderDatabaseEvents(
   if (item.action == @selector(copyPayloadFiles:)) {
     // Let a modal (the Rename dialog) keep Cmd-C for its text field.
     return NSApp.modalWindow == nil;
+  }
+  if (item.action == @selector(removeSelectedLink:)) {
+    // Only meaningful in a Links window with a row selected; greyed elsewhere.
+    FinderRelatedController *related = [self keyRelatedController];
+    return related != nil && related.table.selectedRow >= 0;
+  }
+  if (item.action == @selector(renameSelected:)) {
+    FinderRelatedController *related = [self keyRelatedController];
+    NSTableView *table = related ? related.table : self.table;
+    return table.selectedRowIndexes.count == 1;
   }
   if (item.action == @selector(selectSortMode:)) {
     item.state = [item.representedObject isEqualToString:(self.sortMode ?: @"number")]
