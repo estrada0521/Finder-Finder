@@ -7,5 +7,6 @@ build/
 target/
 .env
 .env.*
+.playwright-mcp/
 
 AGENTS.md

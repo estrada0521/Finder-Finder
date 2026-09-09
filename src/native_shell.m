@@ -18,6 +18,17 @@ extern int finder_native_unlink(const char *seeds, const char *target);
 static NSWindow *lastKeyWindow;
 static const CGFloat FinderHeaderHeight = 36;
 
+// Preset spots for the Window menu's ⌥⌘-arrow moves. Same behaviour as
+// Agent-Window: Top/Left/Right slide along one axis and leave the other where
+// it was (Top tucks under the menu bar); Center recentres on both. Size is
+// never changed.
+typedef NS_ENUM(NSInteger, FinderWindowSpot) {
+  FinderSpotTop = 0,
+  FinderSpotLeft,
+  FinderSpotRight,
+  FinderSpotCenter,
+};
+
 @class FinderNativeController;
 static void FinderDatabaseEvents(
     ConstFSEventStreamRef streamRef,
@@ -868,11 +879,6 @@ static void FinderDatabaseEvents(
   appItem.submenu = app;
   NSMenuItem *fileItem = [NSMenuItem new]; [bar addItem:fileItem];
   NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
-  NSMenuItem *close = [file addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"];
-  close.target = self;
-  NSMenuItem *keepInFront = [file addItemWithTitle:@"Keep in Front" action:@selector(toggleKeepInFront:) keyEquivalent:@"t"];
-  keepInFront.target = self;
-  [file addItem:[NSMenuItem separatorItem]];
   [file addItemWithTitle:@"Open Metadata" action:@selector(metadata:) keyEquivalent:@"j"];
   NSMenuItem *rename = [file addItemWithTitle:@"Rename" action:@selector(renameSelected:) keyEquivalent:@"\r"];
   rename.target = self;
@@ -926,6 +932,28 @@ static void FinderDatabaseEvents(
     item.target = self;
   }
   sortItem.submenu = sortMenu;
+
+  NSMenuItem *windowItem = [NSMenuItem new]; [bar addItem:windowItem];
+  NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+  NSMenuItem *(^spot)(NSString *, unichar, NSInteger) = ^(NSString *title, unichar arrow, NSInteger tag) {
+    NSString *key = [NSString stringWithFormat:@"%C", arrow];
+    NSMenuItem *item = [windowMenu addItemWithTitle:title action:@selector(moveWindowSpot:) keyEquivalent:key];
+    item.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+    item.tag = tag;
+    item.target = self;
+    return item;
+  };
+  spot(@"Move to Top", NSUpArrowFunctionKey, FinderSpotTop);
+  spot(@"Move to Left", NSLeftArrowFunctionKey, FinderSpotLeft);
+  spot(@"Move to Right", NSRightArrowFunctionKey, FinderSpotRight);
+  spot(@"Move to Center", NSDownArrowFunctionKey, FinderSpotCenter);
+  [windowMenu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *keepInFront = [windowMenu addItemWithTitle:@"Keep in Front" action:@selector(toggleKeepInFront:) keyEquivalent:@"t"];
+  keepInFront.target = self;
+  [windowMenu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *close = [windowMenu addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"];
+  close.target = self;
+  windowItem.submenu = windowMenu;
 }
 
 - (NSArray *)recordsSorted:(NSArray *)records {
@@ -1154,6 +1182,31 @@ static void FinderDatabaseEvents(
 - (void)toggleKeepInFront:(id)sender {
   NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
   window.level = window.level == NSFloatingWindowLevel ? NSNormalWindowLevel : NSFloatingWindowLevel;
+}
+- (void)moveWindowSpot:(NSMenuItem *)sender {
+  NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
+  NSScreen *screen = window.screen ?: NSScreen.mainScreen;
+  if (!window || !screen) return;
+  NSRect full = screen.frame;         // Left / Right / Center use the whole screen
+  NSRect visible = screen.visibleFrame; // Top tucks under the menu bar
+  NSRect frame = window.frame;
+  NSPoint origin = frame.origin;
+  switch ((FinderWindowSpot)sender.tag) {
+    case FinderSpotTop:
+      origin.y = NSMaxY(visible) - frame.size.height;
+      break;
+    case FinderSpotLeft:
+      origin.x = NSMinX(full);
+      break;
+    case FinderSpotRight:
+      origin.x = NSMinX(full) + MAX(0.0, full.size.width - frame.size.width);
+      break;
+    case FinderSpotCenter:
+      origin.x = NSMinX(full) + MAX(0.0, (full.size.width - frame.size.width) / 2.0);
+      origin.y = NSMinY(full) + MAX(0.0, (full.size.height - frame.size.height) / 2.0);
+      break;
+  }
+  [window setFrameOrigin:origin];
 }
 - (void)renameSelected:(id)sender {
   FinderRelatedController *related = [self keyRelatedController];
