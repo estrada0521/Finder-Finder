@@ -452,8 +452,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)loadPayload:(NSString *)payload intoCell:(FinderRecordCell *)cell scale:(CGFloat)scale {
   [[QLThumbnailGenerator sharedGenerator] cancelRequest:cell.thumbnailRequest]; cell.thumbnailRequest = nil;
   cell.thumbnailPayload = payload;
+  if (![payload isKindOfClass:NSString.class] || !payload.length || ![[NSFileManager defaultManager] fileExistsAtPath:payload]) {
+    cell.thumbnailView.image = [NSImage imageNamed:NSImageNameCaution];
+    return;
+  }
   cell.thumbnailView.image = [[NSWorkspace sharedWorkspace] iconForFile:payload];
-  if (!payload.length || ![[NSFileManager defaultManager] fileExistsAtPath:payload]) return;
   NSString *key = [self cacheKeyForPayload:payload];
   NSImage *cached = [self.cache objectForKey:key];
   if (cached) { cell.thumbnailView.image = cached; return; }

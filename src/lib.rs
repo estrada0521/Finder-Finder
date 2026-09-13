@@ -43,7 +43,9 @@ struct CatalogColumn {
 struct RecordEntry {
     id: String,
     title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     payload: Option<String>,
+    payload_missing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
     kind: String,
@@ -223,12 +225,14 @@ fn preview_path(dir: &Path, meta: &Value) -> Option<PathBuf> {
 fn entry_for(dir: &Path) -> RecordEntry {
     let id = dir.file_name().unwrap().to_string_lossy().to_string();
     let meta = read_json(&settings::metadata_path(dir));
+    let payload = output_paths(dir, &meta)
+        .ok()
+        .and_then(|paths| paths.first().map(|path| path.to_string_lossy().to_string()));
     RecordEntry {
         id: id.clone(),
         title: display_name(&meta, &id),
-        payload: output_paths(dir, &meta)
-            .ok()
-            .and_then(|paths| paths.first().map(|path| path.to_string_lossy().to_string())),
+        payload_missing: payload.is_none(),
+        payload,
         preview: preview_path(dir, &meta).map(|path| path.to_string_lossy().to_string()),
         kind: text(meta.get("category")),
         mtime: record_mtime(dir),
@@ -773,9 +777,7 @@ pub extern "C" fn finder_native_payloads_json(kind: *const c_char, ids: *const c
         let root = PathBuf::from(db_root()?);
         let paths = native_ids(ids)
             .iter()
-            .map(|id| find_payloads(&root, id))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
+            .filter_map(|id| find_payloads(&root, id).ok())
             .flatten()
             .map(|path| path.to_string_lossy().to_string())
             .collect::<Vec<_>>();
@@ -799,9 +801,7 @@ pub extern "C" fn finder_native_clipboard_files_json(ids: *const c_char) -> *mut
             let root = PathBuf::from(db_root()?);
             native_ids(ids)
                 .iter()
-                .map(|id| find_payloads(&root, id))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
+                .filter_map(|id| find_payloads(&root, id).ok())
                 .flatten()
                 .map(|path| path.to_string_lossy().to_string())
                 .collect()
@@ -924,13 +924,13 @@ fn native_action(kind: *const c_char, ids: *const c_char, action: &str) {
         require_folder(&kind)?;
         let root = PathBuf::from(db_root()?);
         match action {
-            "open" => open_files(&ids.iter().map(|id| find_payloads(&root, id)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>()),
-            "metadata" => open_files(&ids.iter().map(|id| record_metadata_path(&root, id).and_then(canonical_db_file)).collect::<Result<Vec<_>, _>>()?),
+            "open" => open_files(&ids.iter().filter_map(|id| find_payloads(&root, id).ok()).flatten().collect::<Vec<_>>()),
+            "metadata" => open_files(&ids.iter().filter_map(|id| record_metadata_path(&root, id).and_then(canonical_db_file).ok()).collect::<Vec<_>>()),
             "reveal" => {
                 if let Some(item) = active_ql_item() {
                     reveal_files(&item.payloads)
                 } else {
-                    reveal_files(&ids.iter().map(|id| record_metadata_path(&root, id).and_then(canonical_db_file)).collect::<Result<Vec<_>, _>>()?)
+                    reveal_files(&ids.iter().filter_map(|id| record_metadata_path(&root, id).and_then(canonical_db_file).ok()).collect::<Vec<_>>())
                 }
             }
             "open-ql" => {
@@ -945,7 +945,8 @@ fn native_action(kind: *const c_char, ids: *const c_char, action: &str) {
                 let mut paths = Vec::new();
                 let mut items = Vec::new();
                 for id in &ids {
-                    for (path, name, item) in quicklook_items(&root, id)? {
+                    let Ok(entries) = quicklook_items(&root, id) else { continue };
+                    for (path, name, item) in entries {
                         paths.push((path, name));
                         items.push(item);
                     }
