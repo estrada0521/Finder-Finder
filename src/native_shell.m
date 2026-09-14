@@ -8,9 +8,11 @@ extern char *finder_native_related_json(const char *ids, bool direct_only);
 extern char *finder_native_payloads_json(const char *kind, const char *ids);
 extern char *finder_native_clipboard_files_json(const char *ids);
 extern char *finder_native_create_record(const char *category, const char *name, const char *paths);
+extern char *finder_native_record_directory(const char *kind, const char *id);
 extern void finder_native_free_string(char *value);
 extern void finder_native_action(const char *kind, const char *ids, const char *action);
 extern bool finder_native_rename(const char *kind, const char *id, const char *name);
+extern bool finder_native_change_payloads(const char *kind, const char *id, const char *paths);
 extern int finder_native_unlink(const char *seeds, const char *target);
 
 // NSMenu key-equivalent handling can temporarily clear NSApp.keyWindow. Keep
@@ -95,6 +97,37 @@ static NSArray<NSURL *> *FinderPayloadURLs(NSString *kind, NSArray<NSString *> *
     if ([path isKindOfClass:NSString.class] && [path length]) [urls addObject:[NSURL fileURLWithPath:path]];
   }
   return urls;
+}
+
+static NSURL *FinderRecordDirectoryURL(NSString *kind, NSString *recordId) {
+  if (!kind.length || !recordId.length) return nil;
+  char *raw = finder_native_record_directory(kind.UTF8String, recordId.UTF8String);
+  NSString *path = raw ? [[NSString alloc] initWithUTF8String:raw] : nil;
+  if (raw) finder_native_free_string(raw);
+  return path.length ? [NSURL fileURLWithPath:path isDirectory:YES] : nil;
+}
+
+static void FinderChangePayloads(NSString *kind, NSString *recordId, NSWindow *parent) {
+  NSURL *directory = FinderRecordDirectoryURL(kind, recordId);
+  if (!directory) return;
+  NSOpenPanel *panel = [NSOpenPanel openPanel];
+  panel.canChooseFiles = YES;
+  panel.canChooseDirectories = NO;
+  panel.allowsMultipleSelection = YES;
+  panel.directoryURL = directory;
+  panel.prompt = @"Change Payloads";
+  [panel beginSheetModalForWindow:parent completionHandler:^(NSModalResponse response) {
+    if (response != NSModalResponseOK) return;
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    for (NSURL *url in panel.URLs) if (url.isFileURL) [paths addObject:url.path];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:paths options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"[]";
+    if (finder_native_change_payloads(kind.UTF8String, recordId.UTF8String, json.UTF8String)) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Payloads were not changed";
+    alert.informativeText = @"Choose one or more files inside this record.";
+    [alert beginSheetModalForWindow:parent completionHandler:nil];
+  }];
 }
 
 static void FinderBeginPayloadDrag(NSTableView *table, NSEvent *event, NSArray<NSURL *> *urls) {
@@ -264,6 +297,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)quickLookSelected;
 - (void)actOnSelected:(NSString *)action;
 - (void)copyPayloadFilesToPasteboard;
+- (void)changePayloads;
 - (NSMenu *)contextMenuForRow:(NSInteger)row;
 - (void)removeLinkForContextRow:(id)sender;  // representedObject id, else the selected row
 @end
@@ -636,6 +670,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     if (recordId.length) [ids addObject:recordId];
   }];
   FinderCopyPayloadFiles(ids);
+}
+- (void)changePayloads {
+  if (self.table.selectedRowIndexes.count != 1) return;
+  NSDictionary *item = self.items[(NSUInteger)self.table.selectedRow];
+  FinderChangePayloads(item[@"kind"], item[@"id"], self.window);
 }
 - (NSMenu *)contextMenuForRow:(NSInteger)row {
   if (row < 0 || (NSUInteger)row >= self.items.count) return nil;
@@ -1188,6 +1227,12 @@ static void FinderDatabaseEvents(
   if (related) { [related copyPayloadFilesToPasteboard]; return; }
   FinderCopyPayloadFiles(self.selectedIds);   // ids ignored by Rust while Quick Look is up
 }
+- (void)changePayloads:(id)sender {
+  FinderRelatedController *related = [self keyRelatedController];
+  if (related) { [related changePayloads]; return; }
+  if (self.selectedIds.count != 1) return;
+  FinderChangePayloads(self.kind, self.selectedIds.firstObject, self.window);
+}
 - (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
 - (void)removeSelectedLink:(id)sender {
   [[self keyRelatedController] removeLinkForContextRow:nil];  // nil -> the Links window's selected row
@@ -1210,6 +1255,7 @@ static void FinderDatabaseEvents(
   [menu addItem:[NSMenuItem separatorItem]];
   add(@"Open Metadata", @selector(metadata:), @"j", cmd);
   add(@"Reveal in Finder", @selector(reveal:), @"f", cmd);
+  add(@"Change Payloads…", @selector(changePayloads:), @"", 0);
   add(@"Rename", @selector(renameSelected:), @"\r", cmd);
   [menu addItem:[NSMenuItem separatorItem]];
   add(@"Copy", @selector(copyPayloadFiles:), @"c", cmd);
@@ -1333,6 +1379,10 @@ static void FinderDatabaseEvents(
     FinderRelatedController *related = [self keyRelatedController];
     NSTableView *table = related ? related.table : self.table;
     return table.selectedRowIndexes.count == 1;
+  }
+  if (item.action == @selector(changePayloads:)) {
+    FinderRelatedController *related = [self keyRelatedController];
+    return related ? related.table.selectedRowIndexes.count == 1 : self.table.selectedRowIndexes.count == 1;
   }
   if (item.action == @selector(selectSortMode:)) {
     item.state = [item.representedObject isEqualToString:(self.sortMode ?: @"number")]

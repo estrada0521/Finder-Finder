@@ -71,6 +71,7 @@ Everything is available from the menu bar; right-clicking a row opens a menu wit
 | --- | --- | --- |
 | Open payload | double-click / ⌥-click | opens the payload in the default app |
 | Quick Look | click a selected row | `preview`, otherwise each payload |
+| Change Payloads… | row context menu | chooses one or more record-local files and writes them to `payload` |
 | Open Payload from Quick Look | ⌘O | opens the previewed item's payload (only while Quick Look is open) |
 | Open Metadata | ⌘J | opens `metadata.json` |
 | Reveal in Finder | ⌘F | shows it in Finder |

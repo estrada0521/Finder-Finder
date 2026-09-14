@@ -847,6 +847,74 @@ pub extern "C" fn finder_native_rename(kind: *const c_char, id: *const c_char, n
     if let Err(err) = result { eprintln!("[finder-finder-native] rename: {err}"); false } else { true }
 }
 
+#[no_mangle]
+pub extern "C" fn finder_native_record_directory(kind: *const c_char, id: *const c_char) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        if kind.is_null() || id.is_null() {
+            return Err("missing record reference".to_string());
+        }
+        let kind = unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned();
+        let id = unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned();
+        require_folder(&kind)?;
+        let record = record_dir(&PathBuf::from(db_root()?), &id)?;
+        if !record.is_dir() {
+            return Err("record not found".to_string());
+        }
+        Ok(record.to_string_lossy().into_owned())
+    })();
+    CString::new(result.unwrap_or_default()).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn finder_native_change_payloads(
+    kind: *const c_char,
+    id: *const c_char,
+    paths: *const c_char,
+) -> bool {
+    let result = (|| -> Result<(), String> {
+        if kind.is_null() || id.is_null() || paths.is_null() {
+            return Err("missing payload change request".to_string());
+        }
+        let kind = unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned();
+        let id = unsafe { CStr::from_ptr(id) }.to_string_lossy().into_owned();
+        require_folder(&kind)?;
+        let selected: Vec<String> = serde_json::from_str(&unsafe { CStr::from_ptr(paths) }.to_string_lossy())
+            .map_err(|err| format!("invalid payload selection: {err}"))?;
+        if selected.is_empty() {
+            return Err("select at least one payload file".to_string());
+        }
+        let record = record_dir(&PathBuf::from(db_root()?), &id)?;
+        let record = record.canonicalize().map_err(|err| format!("failed to resolve record: {err}"))?;
+        let metadata_path = settings::metadata_path(&record);
+        let mut relative_paths = Vec::with_capacity(selected.len());
+        for selected_path in selected {
+            let path = PathBuf::from(selected_path).canonicalize()
+                .map_err(|err| format!("failed to resolve selected file: {err}"))?;
+            if !path.is_file() || !path.starts_with(&record) || path == metadata_path {
+                return Err("payload must be a file inside the record directory".to_string());
+            }
+            let relative = path.strip_prefix(&record).map_err(|_| "payload is outside the record")?;
+            let relative = relative.to_string_lossy().into_owned();
+            if !relative_paths.contains(&relative) {
+                relative_paths.push(relative);
+            }
+        }
+        let text = fs::read_to_string(&metadata_path).map_err(|err| format!("metadata not found: {err}"))?;
+        let mut metadata: Value = serde_json::from_str(&text).map_err(|err| format!("invalid metadata: {err}"))?;
+        let payload = if relative_paths.len() == 1 {
+            Value::String(relative_paths.remove(0))
+        } else {
+            Value::Array(relative_paths.into_iter().map(Value::String).collect())
+        };
+        metadata.as_object_mut().ok_or("metadata is not a JSON object")?
+            .insert("payload".to_string(), payload);
+        let mut output = serde_json::to_string_pretty(&metadata).map_err(|err| format!("serialize failed: {err}"))?;
+        output.push('\n');
+        fs::write(metadata_path, output).map_err(|err| format!("failed to write metadata: {err}"))
+    })();
+    if let Err(err) = result { eprintln!("[finder-finder-native] change payloads: {err}"); false } else { true }
+}
+
 /// Drop from `id`'s `metadata.json` every `links` entry pointing at one of
 /// `targets`. Returns how many entries were removed (0 if none / no metadata).
 fn remove_link_entries(root: &Path, id: &str, targets: &[String]) -> Result<i32, String> {

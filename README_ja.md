@@ -71,6 +71,7 @@ link window には、直接 link している record を順方向・逆方向か
 | --- | --- | --- |
 | Payload を開く | ダブルクリック / ⌥クリック | payload を既定アプリで開く |
 | Quick Look | 選択済みの行をクリック | `preview`。なければ payload |
+| Change Payloads… | 行の右クリックメニュー | record 内のファイルを選び、`payload` を更新する |
 | Open Payload from Quick Look | ⌘O | Quick Look 表示中の項目の payload を開く（表示中のみ） |
 | Open Metadata | ⌘J | `metadata.json` を開く |
 | Reveal in Finder | ⌘F | Finder で表示 |
