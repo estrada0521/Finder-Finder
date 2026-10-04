@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" = /* ]] || SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/../.." && pwd)"
+BINARY="${CARGO_TARGET_DIR:-$HOME/.finder-finder/cache/native-target}/release/finder-finder"
+if [[ ! -x "$BINARY" ]]; then
+  echo "finder-finder: CLI is not built. Run: $ROOT/build --no-open" >&2
+  exit 1
+fi
+exec "$BINARY" "$@"

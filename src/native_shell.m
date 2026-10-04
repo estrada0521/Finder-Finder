@@ -200,7 +200,7 @@ static void FinderConfigureWindow(NSWindow *window) {
   // closed window is freed while its controller still points at it, and the
   // next FSEvents refresh messages the dangling pointer. Let ARC own lifetime.
   window.releasedWhenClosed = NO;
-  window.level = NSFloatingWindowLevel; // "Keep in Front" defaults on
+  window.level = NSFloatingWindowLevel; // "Always on top" defaults on
   window.titlebarAppearsTransparent = YES;
   window.titleVisibility = NSWindowTitleHidden;
   [window standardWindowButton:NSWindowCloseButton].hidden = YES;
@@ -329,10 +329,20 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)installCategoryKeyMonitor;
 - (BOOL)switchToCategoryForShortcut:(NSString *)letter;
 - (NSArray *)recordsSorted:(NSArray *)records;
+- (void)quickLook:(id)sender;
 - (NSMenu *)rowContextMenu;  // per-row actions, shared by both windows' tables
 @end
 
 @implementation FinderNativeTable
+- (void)keyDown:(NSEvent *)event {
+  NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
+      && [event.charactersIgnoringModifiers isEqualToString:@" "] && self.selectedRow >= 0) {
+    [(FinderNativeController *)self.owner quickLook:nil];
+    return;
+  }
+  [super keyDown:event];
+}
 - (void)mouseDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags;
   BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
@@ -726,6 +736,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderRelatedTable
+- (void)keyDown:(NSEvent *)event {
+  NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
+      && [event.charactersIgnoringModifiers isEqualToString:@" "] && self.selectedRow >= 0) {
+    [self.owner quickLookSelected];
+    return;
+  }
+  [super keyDown:event];
+}
 - (void)mouseDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags;
   BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
@@ -927,30 +946,11 @@ static void FinderDatabaseEvents(
   [app addItemWithTitle:@"Quit Finder Finder" action:@selector(terminate:) keyEquivalent:@"q"];
   appItem.submenu = app;
   NSMenuItem *fileItem = [NSMenuItem new]; [bar addItem:fileItem];
-  NSMenu *file = [[NSMenu alloc] initWithTitle:@"File"];
-  [file addItemWithTitle:@"Open Metadata" action:@selector(metadata:) keyEquivalent:@"j"];
-  NSMenuItem *rename = [file addItemWithTitle:@"Rename" action:@selector(renameSelected:) keyEquivalent:@"\r"];
-  rename.target = self;
-  [file addItemWithTitle:@"Reveal in Finder" action:@selector(reveal:) keyEquivalent:@"f"];
-  NSMenuItem *openQuickLook = [file addItemWithTitle:@"Open Payload from Quick Look" action:@selector(openQuickLookOriginal:) keyEquivalent:@"o"];
-  openQuickLook.target = self;
-  NSMenuItem *copyFiles = [file addItemWithTitle:@"Copy" action:@selector(copyPayloadFiles:) keyEquivalent:@"c"];
-  copyFiles.target = self;
-  NSMenuItem *copyRelativePath = [file addItemWithTitle:@"Copy Relative Path" action:@selector(copyRelative:) keyEquivalent:@"p"];
-  copyRelativePath.target = self;
-  NSMenuItem *copyPath = [file addItemWithTitle:@"Copy Full Path" action:@selector(copy:) keyEquivalent:@"p"];
-  copyPath.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
-  copyPath.target = self;
+  NSMenu *file = [self rowContextMenu];
+  file.title = @"File";
   fileItem.submenu = file; NSApp.mainMenu = bar;
   NSMenuItem *linkItem = [NSMenuItem new]; [bar addItem:linkItem];
   NSMenu *link = [[NSMenu alloc] initWithTitle:@"Link"];
-  NSMenuItem *related = [link addItemWithTitle:@"Open Related" action:@selector(openRelated:) keyEquivalent:@"e"];
-  related.keyEquivalentModifierMask = NSEventModifierFlagCommand;
-  related.target = self;
-  NSMenuItem *relatedDirect = [link addItemWithTitle:@"Open Direct Links" action:@selector(openRelatedDirect:) keyEquivalent:@"e"];
-  relatedDirect.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
-  relatedDirect.target = self;
-  [link addItem:[NSMenuItem separatorItem]];
   NSMenuItem *removeLink = [link addItemWithTitle:@"Remove Link" action:@selector(removeSelectedLink:)
                                     keyEquivalent:[NSString stringWithFormat:@"%C", (unichar)NSBackspaceCharacter]];
   removeLink.keyEquivalentModifierMask = NSEventModifierFlagCommand;
@@ -1002,8 +1002,9 @@ static void FinderDatabaseEvents(
   spot(@"Move to Right", NSRightArrowFunctionKey, FinderSpotRight);
   spot(@"Move to Center", NSDownArrowFunctionKey, FinderSpotCenter);
   [windowMenu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem *keepInFront = [windowMenu addItemWithTitle:@"Keep in Front" action:@selector(toggleKeepInFront:) keyEquivalent:@"t"];
+  NSMenuItem *keepInFront = [windowMenu addItemWithTitle:@"Always on top" action:@selector(toggleKeepInFront:) keyEquivalent:@"t"];
   keepInFront.target = self;
+  keepInFront.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
   [windowMenu addItem:[NSMenuItem separatorItem]];
   NSMenuItem *close = [windowMenu addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"];
   close.target = self;
@@ -1233,13 +1234,12 @@ static void FinderDatabaseEvents(
   if (self.selectedIds.count != 1) return;
   FinderChangePayloads(self.kind, self.selectedIds.firstObject, self.window);
 }
-- (void)openQuickLookOriginal:(id)sender { finder_native_action(self.kind.UTF8String, "[]", "open-ql"); }
 - (void)removeSelectedLink:(id)sender {
   [[self keyRelatedController] removeLinkForContextRow:nil];  // nil -> the Links window's selected row
 }
 // The per-row right-click menu, shared by the main list and the Links window.
-// Items are hard-targeted here; routeAction:/keyRelatedController send them to
-// whichever window is key. Key equivalents are shown as reminders only.
+// Also used for the File menu so order and shortcuts stay identical.
+// Items target this controller, which routes them to the key window.
 - (NSMenu *)rowContextMenu {
   NSMenu *menu = [[NSMenu alloc] init];
   NSMenuItem *(^add)(NSString *, SEL, NSString *, NSEventModifierFlags) =
@@ -1250,19 +1250,19 @@ static void FinderDatabaseEvents(
     return item;
   };
   NSEventModifierFlags cmd = NSEventModifierFlagCommand;
-  add(@"Open", @selector(open:), @"", 0);
-  add(@"Quick Look", @selector(quickLook:), @"", 0);
+  add(@"Open", @selector(open:), @"o", cmd);
+  add(@"Quick Look", @selector(quickLook:), @"y", cmd);
   [menu addItem:[NSMenuItem separatorItem]];
-  add(@"Open Metadata", @selector(metadata:), @"j", cmd);
-  add(@"Reveal in Finder", @selector(reveal:), @"f", cmd);
+  add(@"Reveal in Finder", @selector(reveal:), @"r", cmd | NSEventModifierFlagOption);
+  add(@"Open Metadata", @selector(metadata:), @"i", cmd | NSEventModifierFlagOption);
+  add(@"Rename", @selector(renameSelected:), @"\r", 0);
   add(@"Change Payloads…", @selector(changePayloads:), @"", 0);
-  add(@"Rename", @selector(renameSelected:), @"\r", cmd);
   [menu addItem:[NSMenuItem separatorItem]];
   add(@"Copy", @selector(copyPayloadFiles:), @"c", cmd);
-  add(@"Copy Relative Path", @selector(copyRelative:), @"p", cmd);
-  add(@"Copy Full Path", @selector(copy:), @"p", cmd | NSEventModifierFlagOption);
+  add(@"Copy Absolute Path", @selector(copy:), @"c", cmd | NSEventModifierFlagOption);
+  add(@"Copy Relative Path", @selector(copyRelative:), @"c", cmd | NSEventModifierFlagOption | NSEventModifierFlagShift);
   [menu addItem:[NSMenuItem separatorItem]];
-  add(@"Open Related", @selector(openRelated:), @"e", cmd);
+  add(@"Open Links", @selector(openRelated:), @"e", cmd);
   add(@"Open Direct Links", @selector(openRelatedDirect:), @"e", cmd | NSEventModifierFlagOption);
   return menu;
 }
@@ -1378,7 +1378,8 @@ static void FinderDatabaseEvents(
   if (item.action == @selector(renameSelected:)) {
     FinderRelatedController *related = [self keyRelatedController];
     NSTableView *table = related ? related.table : self.table;
-    return table.selectedRowIndexes.count == 1;
+    return NSApp.modalWindow == nil && table.window.firstResponder == table
+        && table.selectedRowIndexes.count == 1;
   }
   if (item.action == @selector(changePayloads:)) {
     FinderRelatedController *related = [self keyRelatedController];

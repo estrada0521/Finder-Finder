@@ -1,4 +1,7 @@
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_NATIVE").is_none() {
+        return;
+    }
     println!("cargo:rerun-if-changed=src/quicklook_panel.m");
     println!("cargo:rerun-if-changed=src/native_shell.m");
     cc::Build::new()

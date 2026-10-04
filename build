@@ -25,6 +25,7 @@ if (( DEV )); then
   exec cargo run --bin finder-finder-native
 fi
 
+cargo build --release --no-default-features --bin finder-finder
 cargo build --release --bin finder-finder-native
 APP="$TARGET_DIR/release/Finder Finder.app"
 rm -rf "$APP"

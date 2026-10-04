@@ -63,28 +63,27 @@ The links window presents directly linked records in both directions and shows e
 
 ## Menu and shortcuts
 
-Everything is available from the menu bar; right-clicking a row opens a menu with that row's actions. During Quick Look the arrow keys step through items, and `⌘F` / `⌘C` / `⌘P` / `⌥⌘P` / `⌘O` act on the previewed item's payload (in the list they act on the record).
+Everything is available from the menu bar; right-clicking a row opens a menu with that row's actions. During Quick Look the arrow keys step through items, and `⌥⌘R` / `⌘C` / `⌥⇧⌘C` / `⌥⌘C` / `⌘O` act on the previewed item's payload (in the list they act on the record).
 
 ### Files and paths
 
 | Action | Shortcut | Notes |
 | --- | --- | --- |
-| Open payload | double-click / ⌥-click | opens the payload in the default app |
-| Quick Look | click a selected row | `preview`, otherwise each payload |
+| Open | ⌘O / double-click / ⌥-click | opens the payload in the default app |
+| Quick Look | Space / ⌘Y / click a selected row | `preview`, otherwise each payload |
+| Reveal in Finder | ⌥⌘R | shows it in Finder |
+| Open Metadata | ⌥⌘I | opens `metadata.json` |
+| Rename | Return | edits `display_name` (single selection only) |
 | Change Payloads… | row context menu | chooses one or more record-local files and writes them to `payload` |
-| Open Payload from Quick Look | ⌘O | opens the previewed item's payload (only while Quick Look is open) |
-| Open Metadata | ⌘J | opens `metadata.json` |
-| Reveal in Finder | ⌘F | shows it in Finder |
-| Rename | ⌘↩ | edits `display_name` (single selection only) |
 | Copy | ⌘C | copies the payload files themselves to the clipboard |
-| Copy Relative Path | ⌘P | copies the DB-root-relative path |
-| Copy Full Path | ⌥⌘P | copies the full path |
+| Copy Absolute Path | ⌥⌘C | copies the full path |
+| Copy Relative Path | ⌥⇧⌘C | copies the DB-root-relative path |
 
 ### Links
 
 | Action | Shortcut | Notes |
 | --- | --- | --- |
-| Open Related | ⌘E | opens related records along the provenance graph in a new window |
+| Open Links | ⌘E | opens related records along the provenance graph in a new window |
 | Open Direct Links | ⌥⌘E | opens only the directly linked records |
 | Remove Link | ⌘⌫ | removes the direct link to the selected row (links window only; the records are not deleted) |
 
@@ -100,7 +99,7 @@ Everything is available from the menu bar; right-clicking a row opens a menu wit
 | Action | Shortcut | Notes |
 | --- | --- | --- |
 | Move to Top / Left / Right / Center | ⌥⌘↑ / ⌥⌘← / ⌥⌘→ / ⌥⌘↓ | Top/Left/Right move along one axis; Center centers on screen. Size is unchanged |
-| Keep in Front | ⌘T | pins above other windows (on by default) |
+| Always on top | ⌥⌘T | pins above other windows (on by default) |
 | Close Window | ⌘W | closing the last window quits the app |
 
 ## Adding records
@@ -133,3 +132,36 @@ The setting is stored in `~/.finder-finder/settings.json`. Edit `dbRoot` there t
 The app is installed at `/Applications/Finder Finder.app`.
 
 Use `./build --dev` for iterative development. Source changes require a rebuild and application restart.
+
+## Agent CLI
+
+`./build --no-open` builds the GUI and the read-only CLI.
+
+```sh
+ln -s /path/to/LabApp-2/cli/finder-finder/finder-finder ~/.local/bin/finder-finder
+ln -s /path/to/LabApp-2/cli/finder-finder ~/.codex/skills/finder-finder
+finder-finder --json context
+finder-finder --json links record-alpha --direction both --depth 3
+```
+
+Link the same skill directory into other agents' skill directories as needed.
+`~/.local/bin` must be on PATH. The launcher uses `CARGO_TARGET_DIR` or
+`~/.finder-finder/cache/native-target`; it does not build on invocation.
+For CLI-only builds (without macOS GUI frameworks):
+
+```sh
+CARGO_TARGET_DIR="$HOME/.finder-finder/cache/native-target" cargo build --release --no-default-features --bin finder-finder
+```
+
+DB root precedence: `--db-root`, `FINDER_FINDER_DB_ROOT`, then
+`~/.finder-finder/settings.json` (`dbRoot`). CLI does not create settings.
+`context`, `list`, `show`, `links`, and `related` accept `--json`; see
+`finder-finder --help` and [SKILL.md](cli/finder-finder/SKILL.md).
+`links` defaults to outgoing direct references. `related` follows the GUI's
+bidirectional three-hop walk and excludes returns to departed categories.
+JSON schema version 1 includes records, directed edges with original link objects,
+and diagnostics. Exit 1 may include partial results; exit 2 indicates usage errors.
+Each invocation scans metadata without an atomic snapshot and never parses payloads.
+
+Validation: `cargo test --lib`, then
+`python3 tests/cli.py "$HOME/.finder-finder/cache/native-target/release/finder-finder"`.

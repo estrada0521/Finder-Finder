@@ -5,6 +5,10 @@ description = "Finder to find Finder"
 edition = "2021"
 default-run = "finder-finder-native"
 
+[features]
+default = ["native"]
+native = []
+
 [lib]
 name = "finder_finder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -12,6 +16,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "finder-finder-native"
 path = "src/main.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "finder-finder"
+path = "src/bin/finder-finder.rs"
 
 [build-dependencies]
 cc = "1"
