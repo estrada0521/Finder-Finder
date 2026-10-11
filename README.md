@@ -9,7 +9,8 @@ Native application for simple database
 </div>
 
 <p align="center">
-  <img src="media/f100.png" width="100%" alt="Finder Finder">
+  <img src="media/finder-finder-light.png" width="100%" alt="Finder Finder, light">
+  <img src="media/finder-finder-dark.png" width="100%" alt="Finder Finder, dark">
 </p>
 
 ---
