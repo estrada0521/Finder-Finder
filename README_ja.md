@@ -2,9 +2,9 @@
 
 # Finder Finder
 
-Finder to find Finder. 
+Native application for simple database
 
-[English](README.md)
+[English](README.md)								
 
 </div>
 
@@ -19,6 +19,7 @@ Finder to find Finder.
 1つのDatabase root直下に、任意フォルダを雑多に並べる。
 フォルダ名がIDの唯一の正本なので、連番が推奨。アプリ操作の規定では未使用の6桁連番が自動で割り当てられる。
 
+Ex)
 ```text
 Database/
 └── 000256/
@@ -36,7 +37,7 @@ Database/
 | `category` | ✓ | カテゴリごとの一覧が表示される 。|
 | `display_name` | | 単なる表示名。省略時はフォルダ名が使われる。 |
 | `payload` | 操作時 | そのフォルダで開くmain file。フォルダ内の相対pathを使う。複数指定可能。 |
-| `preview` | | Quick Look用の表示用file。原本がcsvで、見たいのはグラフ、といった用途で使う。 |
+| `preview` | | Quick Look用の表示用file。 |
 | `links` | | `{"id": "000256"}` の配列。関連データを繋げる。 |
 
 </details>
