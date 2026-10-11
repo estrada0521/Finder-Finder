@@ -1,12 +1,18 @@
+<div align="center">
+
 # Finder Finder
 
 Finder to find Finder.
 
 [日本語](README_ja.md)
 
+</div>
+
 <p align="center">
-  <img src="media/f100.png" width="740" alt="Finder Finder">
+  <img src="media/f100.png" width="100%" alt="Finder Finder">
 </p>
+
+---
 
 ## DB layout
 
