@@ -526,7 +526,7 @@ fn record_paths(ids: &[String]) -> Result<Vec<PathBuf>, String> {
 fn copy_paths_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
     let text = paths
         .iter()
-        .map(|path| path.to_string_lossy().to_string())
+        .map(|path| format!("`{}`", path.to_string_lossy()))
         .collect::<Vec<_>>()
         .join("\n");
     let mut child = Command::new("pbcopy")

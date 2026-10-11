@@ -9,11 +9,11 @@ metadata, payloads, or settings and do not open GUI windows.
 
 ```sh
 finder-finder --json list --query "report" --limit 20
-finder-finder --json show record-alpha
-finder-finder --json links record-alpha
-finder-finder --json links record-alpha --direction in
-finder-finder --json links record-alpha --direction both --depth 3
-finder-finder --json related record-alpha
+finder-finder --json show 000001
+finder-finder --json links 000001
+finder-finder --json links 000001 --direction in
+finder-finder --json links 000001 --direction both --depth 3
+finder-finder --json related 000001
 ```
 
 Record arguments accept IDs, record directory paths, or metadata.json paths.
