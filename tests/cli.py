@@ -38,8 +38,29 @@ with tempfile.TemporaryDirectory() as tmp:
     record('broken-target', 'unknown', [{'id':'absent'}])
     r = run('links', 'broken-target', code=1)
     assert r['result']['records'][0]['record'] is None and r['diagnostics']
+    # An unrelated broken edge is visible without failing valid queries.
+    clean = run('show', 'alpha')
+    assert clean['schema_version'] == 2 and not clean['diagnostics']
+    assert clean['database_diagnostics']
+    assert not run('links', 'alpha')['diagnostics']
+    brief = run('related', 'alpha', '--summary')['result']
+    assert 'metadata' not in brief['records'][0]['record']
+    assert brief['records'][0]['record']['paths']['payload'][0]['exists']
+    assert run('links', 'alpha', '--summary')['result']['edges'][0]['link']['extra'] == 42
+    # Search only the documented fields; custom scientific metadata stays opaque.
+    meta = json.loads((root / 'alpha' / 'metadata.json').read_text())
+    meta['preview'] = 'unique-preview.png'
+    meta['conditions'] = {'temperature': 'unsupported-search-token'}
+    (root / 'alpha' / 'metadata.json').write_text(json.dumps(meta))
+    assert run('list', '--query', 'unique-preview')['result']['total'] == 1
+    assert run('list', '--query', 'arbitrary-b')['result']['total'] == 1
+    assert run('list', '--query', 'unsupported-search-token')['result']['total'] == 0
+    assert run('show', 'alpha')['result']['record']['metadata']['conditions'] == meta['conditions']
+    run('show', 'alpha', '--summary', code=2)
+    (root / 'alpha' / 'metadata.json').write_bytes(before[str(root / 'alpha' / 'metadata.json')])
     (root / 'beta' / 'metadata.json').write_text('{')
     assert run('context', code=1)['diagnostics']
+    assert run('links', 'alpha', '--direction', 'in', code=1)['diagnostics']
     # Environment overrides configured settings; absent settings are not created.
     home = pathlib.Path(tmp) / 'home'; home.mkdir()
     env = dict(os.environ, HOME=str(home), FINDER_FINDER_DB_ROOT=str(root))

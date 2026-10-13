@@ -1,8 +1,9 @@
 use finder_finder_lib::database::{resolve_root, Database};
 use serde_json::{json, Value};
 
-const HELP: &str = "finder-finder [--db-root PATH] [--json] COMMAND\n\nCommands:\n  context\n  list [--category NAME] [--query TEXT] [--limit N]\n  show RECORD\n  links RECORD... [--direction out|in|both] [--depth N]\n  related RECORD...\n\nRECORD: ID, record directory, or metadata.json path.\nlinks defaults to outgoing direct references. related uses the GUI's\nbidirectional 3-hop walk, excluding returns to departed categories.\nRead-only. JSON stdout includes schema_version, db_root and diagnostics.\nExit codes: 0 success, 1 data/config error or partial result, 2 usage error.";
+const HELP: &str = "finder-finder [--db-root PATH] [--json] COMMAND\n\nCommands:\n  context\n  list [--category NAME] [--query TEXT] [--limit N] [--summary]\n  show RECORD\n  links RECORD... [--direction out|in|both] [--depth N] [--summary]\n  related RECORD... [--summary]\n\nRECORD: ID, record directory, or metadata.json path.\nlinks defaults to outgoing direct references. related uses the GUI's\nbidirectional 3-hop walk, excluding returns to departed categories.\nRead-only. --summary keeps identity, file paths and links without full metadata.\n--query searches ID and the README-defined metadata fields.\nJSON separates result diagnostics from database_diagnostics. No payload parsing.\nExit codes: 0 success, 1 data/config error or partial result, 2 usage error.";
 fn run(args: &[String]) -> Result<(Value, bool), (i32, String)> {
+    let mut summary = false;
     let mut root = None;
     let mut category = None;
     let mut query = None;
@@ -18,6 +19,11 @@ fn run(args: &[String]) -> Result<(Value, bool), (i32, String)> {
         let arg = &args[i];
         if options && arg == "--" {
             options = false;
+            i += 1;
+            continue;
+        }
+        if options && arg == "--summary" {
+            summary = true;
             i += 1;
             continue;
         }
@@ -93,8 +99,11 @@ fn run(args: &[String]) -> Result<(Value, bool), (i32, String)> {
     {
         return Err((2, "invalid number of record arguments".into()));
     }
+    if summary && !["list", "links", "related"].contains(&command.as_str()) {
+        return Err((2, "summary requires list, links or related".into()));
+    }
     let db = Database::read(resolve_root(root).map_err(|e| (1, e))?).map_err(|e| (1, e))?;
-    let result = match command.as_str() {
+    let mut result = match command.as_str() {
         "context" => {
             let mut categories = std::collections::BTreeSet::new();
             for r in db.records.values() {
@@ -113,13 +122,17 @@ fn run(args: &[String]) -> Result<(Value, bool), (i32, String)> {
                         .as_ref()
                         .is_none_or(|c| r["category"].as_str() == Some(c))
                         && query.as_ref().is_none_or(|q| {
-                            format!(
-                                "{} {}",
-                                r["id"].as_str().unwrap_or(""),
-                                r["display_name"].as_str().unwrap_or("")
-                            )
-                            .to_lowercase()
-                            .contains(&q.to_lowercase())
+                            let fields = json!({
+                                "id": r["id"],
+                                "category": r["metadata"]["category"],
+                                "display_name": r["display_name"],
+                                "payload": r["metadata"]["payload"],
+                                "preview": r["metadata"]["preview"],
+                                "links": r["metadata"]["links"]
+                            });
+                            searchable_text(&fields)
+                                .to_lowercase()
+                                .contains(&q.to_lowercase())
                         })
                 })
                 .cloned()
@@ -154,11 +167,81 @@ fn run(args: &[String]) -> Result<(Value, bool), (i32, String)> {
             )
         }
     };
-    let partial = !db.diagnostics.is_empty();
+    let mut ids = std::collections::HashSet::new();
+    if let Some(record) = result["record"]["id"].as_str() {
+        ids.insert(record.to_owned());
+    }
+    for key in ["seeds", "records"] {
+        for item in result[key].as_array().into_iter().flatten() {
+            if let Some(id) = item.as_str().or_else(|| item["id"].as_str()) {
+                ids.insert(id.to_owned());
+            }
+        }
+    }
+    // Unreadable records can hide search candidates or incoming references.
+    // Do not call those queries complete merely because known records look fine.
+    let diagnostics: Vec<_> = db
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            if command == "context" {
+                return true;
+            }
+            let id = d["record"].as_str().unwrap_or("");
+            if !db.records.contains_key(id)
+                && (command == "list" || command == "related" || direction != "out")
+            {
+                return true;
+            }
+            if let Some(target) = d["target"].as_str() {
+                if command == "show" || command == "list" {
+                    return ids.contains(id);
+                }
+                return result["edges"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|e| e["from"] == id && e["to"] == target);
+            }
+            ids.contains(id)
+        })
+        .cloned()
+        .collect();
+    if summary {
+        if let Some(records) = result["records"].as_array_mut() {
+            for record in records {
+                if record.get("record").is_some() {
+                    if !record["record"].is_null() {
+                        record["record"] = record_summary(&record["record"]);
+                    }
+                } else {
+                    *record = record_summary(record);
+                }
+            }
+        }
+    }
+    let partial = !diagnostics.is_empty();
     Ok((
-        json!({"schema_version":1,"db_root":db.root,"command":command,"result":result,"diagnostics":db.diagnostics}),
+        json!({"schema_version":2,"db_root":db.root,"command":command,"result":result,
+               "diagnostics":diagnostics,"database_diagnostics":db.diagnostics}),
         partial,
     ))
+}
+fn searchable_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().map(searchable_text).collect::<Vec<_>>().join(" "),
+        Value::Object(o) => o
+            .values()
+            .map(searchable_text)
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+fn record_summary(record: &Value) -> Value {
+    json!({"id":record["id"],"category":record["category"],"display_name":record["display_name"],
+           "paths":record["paths"],"links":record["metadata"]["links"]})
 }
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -187,7 +270,7 @@ fn main() {
             if json_output {
                 println!(
                     "{}",
-                    json!({"schema_version":1,"error":{"message":message,"exit_code":code}})
+                    json!({"schema_version":2,"error":{"message":message,"exit_code":code}})
                 );
             }
             eprintln!("finder-finder: {message}");
@@ -196,10 +279,18 @@ fn main() {
     }
 }
 fn print_text(v: &Value) {
+    println!("DB: {}", v["db_root"].as_str().unwrap_or(""));
     let r = &v["result"];
     if let Some(record) = r.get("record") {
         println!("{}", serde_json::to_string_pretty(record).unwrap());
     } else if let Some(records) = r["records"].as_array() {
+        println!(
+            "Records: {}{}",
+            records.len(),
+            r.get("total")
+                .map(|n| format!(" / {n} matches"))
+                .unwrap_or_default()
+        );
         for record in records {
             let entry = record.get("record").unwrap_or(record);
             println!(
@@ -212,6 +303,19 @@ fn print_text(v: &Value) {
                     .map(|d| format!("\t{d} hops"))
                     .unwrap_or_default()
             );
+            for key in ["payload", "preview"] {
+                for file in entry["paths"][key].as_array().into_iter().flatten() {
+                    println!(
+                        "  {key}: {}{}",
+                        file["path"].as_str().unwrap_or(""),
+                        if file["exists"] == false {
+                            " [missing]"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
         }
         if let Some(edges) = r["edges"].as_array() {
             for edge in edges {
@@ -225,6 +329,16 @@ fn print_text(v: &Value) {
         }
     } else {
         println!("{}", serde_json::to_string_pretty(r).unwrap());
+    }
+    if let Some(ds) = v["database_diagnostics"].as_array() {
+        for d in ds {
+            if !v["diagnostics"]
+                .as_array()
+                .is_some_and(|local| local.contains(d))
+            {
+                eprintln!("database diagnostic (outside result): {d}");
+            }
+        }
     }
     if let Some(ds) = v["diagnostics"].as_array() {
         for d in ds {
