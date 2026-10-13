@@ -32,6 +32,7 @@ typedef NS_ENUM(NSInteger, FinderWindowSpot) {
 };
 
 @class FinderNativeController;
+@class FinderGridController;
 static void FinderDatabaseEvents(
     ConstFSEventStreamRef streamRef,
     void *clientCallBackInfo,
@@ -272,6 +273,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSTextField *titleView;
 @property(nonatomic, copy) NSString *thumbnailPayload;
 @property(nonatomic) QLThumbnailGenerationRequest *thumbnailRequest;
+@property(nonatomic) BOOL gridMode;
 @end
 
 @interface FinderRecordRow : NSTableRowView
@@ -287,6 +289,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSWindow *window;
 @property(nonatomic) NSTableView *table;
 @property(nonatomic) NSScrollView *scroll;
+@property(nonatomic) FinderGridController *grid;
 @property(nonatomic) FinderDragHeader *header;
 @property(nonatomic) NSArray *items;
 @property(nonatomic, copy) NSArray<NSString *> *seedIDs;
@@ -310,6 +313,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) NSWindow *window;
 @property(nonatomic) FinderNativeTable *table;
 @property(nonatomic) NSScrollView *scroll;
+@property(nonatomic) FinderGridController *grid;
 @property(nonatomic) NSArray *columns;
 @property(nonatomic) NSArray *records;
 @property(nonatomic) NSString *activeKind;
@@ -330,10 +334,15 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (BOOL)switchToCategoryForShortcut:(NSString *)letter;
 - (NSArray *)recordsSorted:(NSArray *)records;
 - (void)quickLook:(id)sender;
+- (void)selectViewMode:(NSMenuItem *)sender;
 - (NSMenu *)rowContextMenu;  // per-row actions, shared by both windows' tables
 @end
 
 @implementation FinderNativeTable
+- (void)reloadData {
+  [super reloadData];
+  [[NSNotificationCenter defaultCenter] postNotificationName:@"FinderRecordsReloaded" object:self];
+}
 - (void)keyDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
   if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
@@ -465,6 +474,12 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (void)layout {
   [super layout];
+  if (self.gridMode) {
+    CGFloat width = NSWidth(self.bounds);
+    self.thumbnailView.frame = NSMakeRect((width - 96) / 2, 32, 96, 96);
+    self.titleView.frame = NSMakeRect(4, 6, width - 8, 22);
+    return;
+  }
   const CGFloat thumbnailSize = 28;
   const CGFloat leading = 0;
   const CGFloat titleLeading = leading + thumbnailSize + 8;
@@ -501,10 +516,11 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     return;
   }
   cell.thumbnailView.image = [[NSWorkspace sharedWorkspace] iconForFile:payload];
-  NSString *key = [self cacheKeyForPayload:payload];
+  CGFloat dimension = cell.gridMode ? 104 : 30;
+  NSString *key = [NSString stringWithFormat:@"%@|%.0f|%.1f", [self cacheKeyForPayload:payload], dimension, scale];
   NSImage *cached = [self.cache objectForKey:key];
   if (cached) { cell.thumbnailView.image = cached; return; }
-  QLThumbnailGenerationRequest *request = [[QLThumbnailGenerationRequest alloc] initWithFileAtURL:[NSURL fileURLWithPath:payload] size:CGSizeMake(30, 30) scale:MAX(scale, 1.0) representationTypes:QLThumbnailGenerationRequestRepresentationTypeThumbnail];
+  QLThumbnailGenerationRequest *request = [[QLThumbnailGenerationRequest alloc] initWithFileAtURL:[NSURL fileURLWithPath:payload] size:CGSizeMake(dimension, dimension) scale:MAX(scale, 1.0) representationTypes:QLThumbnailGenerationRequestRepresentationTypeThumbnail];
   request.iconMode = NO;
   cell.thumbnailRequest = request;
   __weak FinderRecordCell *weakCell = cell;
@@ -520,6 +536,178 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
       }
     });
   }];
+}
+@end
+
+@interface FinderGridItem : NSCollectionViewItem
+@end
+
+@interface FinderGridView : NSCollectionView
+@property(nonatomic, weak) FinderGridController *gridOwner;
+@property(nonatomic) BOOL beganDrag;
+@end
+
+@interface FinderGridController : NSObject <NSCollectionViewDataSource, NSCollectionViewDelegate>
+@property(nonatomic) FinderGridView *view;
+@property(nonatomic, weak) NSTableView *table;
+@property(nonatomic, weak) id owner;
+@property(nonatomic) BOOL synchronizing;
+- (instancetype)initWithOwner:(id)owner table:(NSTableView *)table;
+- (NSArray *)records;
+- (void)reload;
+- (void)open;
+- (void)quickLook;
+@end
+
+@implementation FinderGridItem
+- (void)loadView {
+  FinderRecordCell *cell = [[FinderRecordCell alloc] initWithFrame:NSMakeRect(0, 0, 132, 140)];
+  cell.gridMode = YES;
+  cell.titleView.font = [NSFont systemFontOfSize:12];
+  cell.titleView.alignment = NSTextAlignmentCenter;
+  cell.titleView.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  self.view = cell;
+}
+- (void)setSelected:(BOOL)selected {
+  [super setSelected:selected];
+  self.view.wantsLayer = YES;
+  self.view.layer.cornerRadius = 8;
+  self.view.layer.backgroundColor = (selected ? [NSColor.selectedContentBackgroundColor colorWithAlphaComponent:0.55] : NSColor.clearColor).CGColor;
+  ((FinderRecordCell *)self.view).titleView.textColor = selected ? NSColor.alternateSelectedControlTextColor : NSColor.labelColor;
+}
+- (void)prepareForReuse {
+  [super prepareForReuse];
+  [(FinderRecordCell *)self.view prepareForReuse];
+}
+@end
+
+@implementation FinderGridController
+- (instancetype)initWithOwner:(id)owner table:(NSTableView *)table {
+  if (!(self = [super init])) return nil;
+  self.owner = owner; self.table = table;
+  self.view = [[FinderGridView alloc] initWithFrame:NSMakeRect(0, 0, 300, 384)];
+  self.view.gridOwner = self;
+  self.view.dataSource = self; self.view.delegate = self;
+  self.view.selectable = YES; self.view.allowsMultipleSelection = YES;
+  self.view.backgroundColors = @[NSColor.clearColor];
+  self.view.autoresizingMask = NSViewWidthSizable;
+  NSCollectionViewFlowLayout *layout = [NSCollectionViewFlowLayout new];
+  layout.itemSize = NSMakeSize(120, 140);
+  layout.minimumInteritemSpacing = 8; layout.minimumLineSpacing = 8;
+  layout.sectionInset = NSEdgeInsetsMake(12, 12, 12, 12);
+  self.view.collectionViewLayout = layout;
+  [self.view registerClass:FinderGridItem.class forItemWithIdentifier:@"grid-record"];
+  [self.view registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+  [self.view setDraggingSourceOperationMask:NSDragOperationCopy forLocal:NO];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(recordsChanged:) name:@"FinderRecordsReloaded" object:table];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(selectionChanged:) name:NSTableViewSelectionDidChangeNotification object:table];
+  return self;
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (NSArray *)records {
+  return [self.owner isKindOfClass:FinderRelatedController.class] ? ((FinderRelatedController *)self.owner).items : ((FinderNativeController *)self.owner).records;
+}
+- (NSSet<NSIndexPath *> *)selectionPaths {
+  NSMutableSet *paths = [NSMutableSet set];
+  [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
+    (void)stop;
+    if (row < self.records.count) [paths addObject:[NSIndexPath indexPathForItem:row inSection:0]];
+  }];
+  return paths;
+}
+- (void)recordsChanged:(NSNotification *)note { [self reload]; }
+- (void)selectionChanged:(NSNotification *)note {
+  if (self.synchronizing) return;
+  self.synchronizing = YES;
+  self.view.selectionIndexPaths = [self selectionPaths];
+  self.synchronizing = NO;
+}
+- (void)reload {
+  self.synchronizing = YES;
+  [self.view reloadData];
+  self.view.selectionIndexPaths = [self selectionPaths];
+  self.synchronizing = NO;
+}
+- (NSInteger)collectionView:(NSCollectionView *)collectionView numberOfItemsInSection:(NSInteger)section { return self.records.count; }
+- (NSCollectionViewItem *)collectionView:(NSCollectionView *)collectionView itemForRepresentedObjectAtIndexPath:(NSIndexPath *)path {
+  FinderGridItem *item = [collectionView makeItemWithIdentifier:@"grid-record" forIndexPath:path];
+  NSDictionary *record = self.records[path.item];
+  FinderRecordCell *cell = (FinderRecordCell *)item.view;
+  cell.titleView.stringValue = record[@"title"] ?: record[@"id"] ?: @"";
+  cell.toolTip = cell.titleView.stringValue;
+  [cell setNeedsLayout:YES];
+  NSString *preview = record[@"preview"];
+  [[FinderThumbnailManager shared] loadPayload:preview.length ? preview : record[@"payload"] intoCell:cell scale:collectionView.window.backingScaleFactor ?: 1.0];
+  return item;
+}
+- (void)syncSelection {
+  if (self.synchronizing) return;
+  self.synchronizing = YES;
+  NSMutableIndexSet *rows = [NSMutableIndexSet indexSet];
+  for (NSIndexPath *path in self.view.selectionIndexPaths) [rows addIndex:path.item];
+  [self.table selectRowIndexes:rows byExtendingSelection:NO];
+  self.synchronizing = NO;
+}
+- (void)collectionView:(NSCollectionView *)view didSelectItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths { [self syncSelection]; }
+- (void)collectionView:(NSCollectionView *)view didDeselectItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths { [self syncSelection]; }
+- (void)open {
+  if ([self.owner isKindOfClass:FinderRelatedController.class]) [(FinderRelatedController *)self.owner openSelected];
+  else [self.owner performSelector:@selector(open:) withObject:nil];
+}
+- (void)quickLook {
+  if ([self.owner isKindOfClass:FinderRelatedController.class]) [(FinderRelatedController *)self.owner quickLookSelected];
+  else [(FinderNativeController *)self.owner quickLook:nil];
+}
+- (BOOL)collectionView:(NSCollectionView *)view canDragItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths withEvent:(NSEvent *)event { return paths.count > 0; }
+- (void)collectionView:(NSCollectionView *)view draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)point forItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths {
+  self.view.beganDrag = YES;
+}
+- (NSArray<NSURL *> *)payloadURLsForPaths:(NSSet<NSIndexPath *> *)paths {
+  NSMutableArray *urls = [NSMutableArray array];
+  for (NSIndexPath *path in [paths.allObjects sortedArrayUsingSelector:@selector(compare:)]) {
+    NSDictionary *record = self.records[path.item];
+    NSString *kind = record[@"kind"] ?: ((FinderNativeController *)NSApp.delegate).activeKind;
+    [urls addObjectsFromArray:FinderPayloadURLs(kind, @[record[@"id"]])];
+  }
+  return urls;
+}
+- (BOOL)collectionView:(NSCollectionView *)view writeItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths toPasteboard:(NSPasteboard *)pasteboard {
+  return [pasteboard writeObjects:[self payloadURLsForPaths:paths]];
+}
+@end
+
+@implementation FinderGridView
+- (void)keyDown:(NSEvent *)event {
+  if ([event.charactersIgnoringModifiers isEqualToString:@" "] && !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption))) {
+    [self.gridOwner quickLook]; return;
+  }
+  [super keyDown:event];
+}
+- (void)mouseDown:(NSEvent *)event {
+  NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  BOOL selected = path && [self.selectionIndexPaths containsObject:path];
+  self.beganDrag = NO;
+  [super mouseDown:event];
+  if (!path || self.beganDrag) return;
+  if ((event.modifierFlags & NSEventModifierFlagOption) || event.clickCount > 1) [self.gridOwner open];
+  else if (selected && !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagShift))) [self.gridOwner quickLook];
+}
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  if (!path) return nil;
+  if (![self.selectionIndexPaths containsObject:path]) {
+    self.selectionIndexPaths = [NSSet setWithObject:path];
+    [self.gridOwner syncSelection];
+  }
+  id owner = self.gridOwner.owner;
+  return [owner isKindOfClass:FinderRelatedController.class] ? [owner contextMenuForRow:path.item] : [owner rowContextMenu];
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender) != NSDragOperationNone; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  if (FinderDragIsInternal(sender)) return NO;
+  return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)];
 }
 @end
 
@@ -736,6 +924,10 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderRelatedTable
+- (void)reloadData {
+  [super reloadData];
+  [[NSNotificationCenter defaultCenter] postNotificationName:@"FinderRecordsReloaded" object:self];
+}
 - (void)keyDown:(NSEvent *)event {
   NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
   if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
@@ -986,6 +1178,15 @@ static void FinderDatabaseEvents(
     item.target = self;
   }
   sortItem.submenu = sortMenu;
+
+  NSMenuItem *viewItem = [NSMenuItem new]; [bar addItem:viewItem];
+  NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+  for (NSArray *pair in @[@[@"List", @"1"], @[@"Grid", @"2"]]) {
+    NSMenuItem *item = [viewMenu addItemWithTitle:pair[0] action:@selector(selectViewMode:) keyEquivalent:pair[1]];
+    item.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    item.representedObject = pair[0]; item.target = self;
+  }
+  viewItem.submenu = viewMenu;
 
   NSMenuItem *windowItem = [NSMenuItem new]; [bar addItem:windowItem];
   NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -1300,6 +1501,29 @@ static void FinderDatabaseEvents(
   }
   [window setFrameOrigin:origin];
 }
+- (void)selectViewMode:(NSMenuItem *)sender {
+  FinderRelatedController *related = [self keyRelatedController];
+  NSWindow *window = related ? related.window : self.window;
+  NSTableView *table = related ? related.table : self.table;
+  NSScrollView *scroll = related ? related.scroll : self.scroll;
+  FinderGridController *grid = related ? related.grid : self.grid;
+  BOOL showGrid = [sender.representedObject isEqualToString:@"Grid"];
+  if (showGrid && !grid) {
+    grid = [[FinderGridController alloc] initWithOwner:related ?: (id)self table:table];
+    if (related) related.grid = grid; else self.grid = grid;
+  }
+  BOOL wasGrid = [scroll.documentView isKindOfClass:FinderGridView.class];
+  if (wasGrid == showGrid) return;
+  NSView *view = showGrid ? grid.view : table;
+  scroll.documentView = view;
+  view.frame = NSMakeRect(0, 0, scroll.contentSize.width, MAX(scroll.contentSize.height, view.frame.size.height));
+  if (showGrid) [grid reload]; else [table reloadData];
+  [window makeFirstResponder:view];
+  if (table.selectedRow >= 0) {
+    if (showGrid) [grid.view scrollToItemsAtIndexPaths:[grid selectionPaths] scrollPosition:NSCollectionViewScrollPositionNearestHorizontalEdge | NSCollectionViewScrollPositionNearestVerticalEdge];
+    else [table scrollRowToVisible:table.selectedRow];
+  }
+}
 - (void)renameSelected:(id)sender {
   FinderRelatedController *related = [self keyRelatedController];
   NSTableView *table = related ? related.table : self.table;
@@ -1355,6 +1579,12 @@ static void FinderDatabaseEvents(
 - (void)openRelated:(id)sender { [self openRelatedWithDirectOnly:NO]; }
 - (void)openRelatedDirect:(id)sender { [self openRelatedWithDirectOnly:YES]; }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
+  if (item.action == @selector(selectViewMode:)) {
+    FinderRelatedController *related = [self keyRelatedController];
+    BOOL grid = [(related ? related.scroll : self.scroll).documentView isKindOfClass:FinderGridView.class];
+    item.state = ([item.representedObject isEqualToString:@"Grid"] == grid) ? NSControlStateValueOn : NSControlStateValueOff;
+    return NSApp.modalWindow == nil;
+  }
   if (item.action == @selector(toggleKeepInFront:)) {
     NSWindow *window = NSApp.keyWindow ?: lastKeyWindow ?: self.window;
     item.state = window.level == NSFloatingWindowLevel ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1378,7 +1608,9 @@ static void FinderDatabaseEvents(
   if (item.action == @selector(renameSelected:)) {
     FinderRelatedController *related = [self keyRelatedController];
     NSTableView *table = related ? related.table : self.table;
-    return NSApp.modalWindow == nil && table.window.firstResponder == table
+    NSWindow *window = related ? related.window : self.window;
+    NSView *view = related ? related.scroll.documentView : self.scroll.documentView;
+    return NSApp.modalWindow == nil && window.firstResponder == view
         && table.selectedRowIndexes.count == 1;
   }
   if (item.action == @selector(changePayloads:)) {
