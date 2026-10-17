@@ -263,7 +263,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @interface FinderDragHeader : NSView
 @property(nonatomic) NSTextField *titleLabel;
 @property(nonatomic) NSPoint startMouse;
-@property(nonatomic) NSRect startFrame;
+@property(nonatomic) BOOL dragged;
 @property(nonatomic) BOOL usesLiquidGlass;
 @property(nonatomic, copy) void (^onClick)(void);
 @end
@@ -441,17 +441,21 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
     NSRectFill(NSMakeRect(0, 0, self.bounds.size.width, 1));
   }
 }
-- (void)mouseDown:(NSEvent *)event { self.startMouse = NSEvent.mouseLocation; self.startFrame = self.window.frame; }
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+- (void)mouseDown:(NSEvent *)event {
+  self.startMouse = NSEvent.mouseLocation;
+  self.dragged = NO;
+}
 - (void)mouseDragged:(NSEvent *)event {
+  if (self.dragged) return;
   NSPoint now = NSEvent.mouseLocation;
-  NSRect frame = self.startFrame;
-  frame.origin.x += now.x - self.startMouse.x;
-  frame.origin.y += now.y - self.startMouse.y;
-  [self.window setFrameOrigin:frame.origin];
+  if (hypot(now.x - self.startMouse.x, now.y - self.startMouse.y) < 4.0) return;
+  self.dragged = YES;
+  [self.window performWindowDragWithEvent:event];
 }
 - (void)mouseUp:(NSEvent *)event {
   NSPoint now = NSEvent.mouseLocation;
-  if (self.onClick && hypot(now.x - self.startMouse.x, now.y - self.startMouse.y) < 4.0) self.onClick();
+  if (!self.dragged && self.onClick && hypot(now.x - self.startMouse.x, now.y - self.startMouse.y) < 4.0) self.onClick();
 }
 @end
 
@@ -993,6 +997,7 @@ static void FinderDatabaseEvents(
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
 - (void)applicationWillTerminate:(NSNotification *)note { [self saveWindowState]; }
 - (void)saveWindowState {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(saveWindowState) object:nil];
   if (self.restoringWindowState || !self.windowStateKey.length || !self.scroll) return;
   NSDictionary *state = @{
     @"category": self.activeKind ?: @"",
@@ -1003,7 +1008,11 @@ static void FinderDatabaseEvents(
   [NSUserDefaults.standardUserDefaults setObject:state forKey:self.windowStateKey];
 }
 - (void)windowWillClose:(NSNotification *)note { [self saveWindowState]; }
-- (void)windowDidMove:(NSNotification *)note { [self saveWindowState]; }
+- (void)scheduleWindowStateSave {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(saveWindowState) object:nil];
+  [self performSelector:@selector(saveWindowState) withObject:nil afterDelay:0.3];
+}
+- (void)windowDidMove:(NSNotification *)note { [self scheduleWindowStateSave]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }
 - (void)applicationDidBecomeActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 - (void)applicationDidResignActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
@@ -1599,7 +1608,7 @@ static void FinderDatabaseEvents(
   self.table.frame = frame;
   self.table.tableColumns.firstObject.width = width;
   [self.table reloadData];
-  [self saveWindowState];
+  [self scheduleWindowStateSave];
 }
 - (void)openRelatedForIDs:(NSArray<NSString *> *)ids parent:(NSWindow *)parent directOnly:(BOOL)directOnly {
   NSMutableArray<NSString *> *seeds = [NSMutableArray array];
