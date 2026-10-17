@@ -326,6 +326,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @property(nonatomic) id categoryKeyMonitor;
 // Row order for the main list: "number" (default) / "name" / "modified" / "links".
 @property(nonatomic, copy) NSString *sortMode;
+@property(nonatomic, copy) NSString *windowStateKey;
+@property(nonatomic) BOOL restoringWindowState;
+- (void)saveWindowState;
 - (void)setupMainWindow;
 - (void)importDroppedFiles:(NSArray<NSURL *> *)urls fromWindow:(NSWindow *)window;
 - (void)scheduleCatalogRefresh;
@@ -988,11 +991,32 @@ static void FinderDatabaseEvents(
 @implementation FinderNativeController
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
+- (void)applicationWillTerminate:(NSNotification *)note { [self saveWindowState]; }
+- (void)saveWindowState {
+  if (self.restoringWindowState || !self.windowStateKey.length || !self.scroll) return;
+  NSDictionary *state = @{
+    @"category": self.activeKind ?: @"",
+    @"sort": self.sortMode ?: @"number",
+    @"view": [self.scroll.documentView isKindOfClass:FinderGridView.class] ? @"Grid" : @"List",
+    @"frame": NSStringFromRect(self.window.frame)
+  };
+  [NSUserDefaults.standardUserDefaults setObject:state forKey:self.windowStateKey];
+}
+- (void)windowWillClose:(NSNotification *)note { [self saveWindowState]; }
+- (void)windowDidMove:(NSNotification *)note { [self saveWindowState]; }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }
 - (void)applicationDidBecomeActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 - (void)applicationDidResignActive:(NSNotification *)note { FinderUpdateAllGlassTints(); }
 
 - (void)setupMainWindow {
+  self.restoringWindowState = YES;
+  char *rawRoot = finder_native_db_root();
+  NSString *root = rawRoot ? [NSString stringWithUTF8String:rawRoot] : @"";
+  if (rawRoot) finder_native_free_string(rawRoot);
+  self.windowStateKey = [@"MainWindowState:" stringByAppendingString:root.stringByStandardizingPath];
+  NSDictionary *saved = [NSUserDefaults.standardUserDefaults dictionaryForKey:self.windowStateKey] ?: @{};
+  NSString *sort = saved[@"sort"];
+  self.sortMode = [@[@"number", @"name", @"modified", @"links"] containsObject:sort ?: @""] ? sort : @"number";
   NSRect frame = NSMakeRect(0, 0, 300, 420);
   self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:FinderWindowStyle() backing:NSBackingStoreBuffered defer:NO];
   FinderConfigureWindow(self.window);
@@ -1046,7 +1070,24 @@ static void FinderDatabaseEvents(
     else { grip.frame = NSMakeRect(290, 0, 10, 10); grip.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin; }
     [content addSubview:grip];
   }
-  [self loadCatalog];
+  [self loadCatalogPreferringKind:saved[@"category"] selectedIDs:@[]];
+  if ([saved[@"view"] isEqualToString:@"Grid"]) {
+    NSMenuItem *mode = [NSMenuItem new]; mode.representedObject = @"Grid";
+    [self selectViewMode:mode];
+  }
+  if ([saved[@"frame"] isKindOfClass:NSString.class]) {
+    NSRect restored = NSRectFromString(saved[@"frame"]);
+    if (restored.size.width >= 180 && restored.size.height >= 140) {
+      BOOL onScreen = NO;
+      for (NSScreen *screen in NSScreen.screens) {
+        NSRect header = NSMakeRect(restored.origin.x, NSMaxY(restored) - FinderHeaderHeight, restored.size.width, FinderHeaderHeight);
+        if (NSContainsRect(screen.visibleFrame, header)) { onScreen = YES; break; }
+      }
+      if (onScreen) [self.window setFrame:restored display:NO];
+    }
+  }
+  self.restoringWindowState = NO;
+  [self saveWindowState];
   [self installMenu];
   [self installCategoryKeyMonitor];
   [self startWatchingDatabase];
@@ -1234,6 +1275,7 @@ static void FinderDatabaseEvents(
   NSString *mode = sender.representedObject;
   if (!mode.length || [mode isEqualToString:(self.sortMode ?: @"number")]) return;
   self.sortMode = mode;
+  [self saveWindowState];
   NSArray<NSString *> *selected = self.selectedIds;
   NSUInteger index = [self.columns indexOfObjectPassingTest:^BOOL(NSDictionary *column, NSUInteger idx, BOOL *stop) {
     (void)idx; (void)stop;
@@ -1341,6 +1383,7 @@ static void FinderDatabaseEvents(
   self.header.titleLabel.stringValue = column[@"label"] ?: self.activeKind;
   self.records = [self recordsSorted:(column[@"records"] ?: @[])];
   [self.table reloadData];
+  [self saveWindowState];
 }
 - (BOOL)switchToKind:(NSString *)kind {
   if (!kind.length) return NO;
@@ -1513,7 +1556,16 @@ static void FinderDatabaseEvents(
     if (related) related.grid = grid; else self.grid = grid;
   }
   BOOL wasGrid = [scroll.documentView isKindOfClass:FinderGridView.class];
-  if (wasGrid == showGrid) return;
+  NSSize size = showGrid ? NSMakeSize(5 * 120 + 4 * 8 + 24 + 20, 3 * 140 + 2 * 8 + 24 + FinderHeaderHeight) : NSMakeSize(300, 420);
+  NSRect frame = window.frame;
+  NSSize frameSize = [window frameRectForContentRect:NSMakeRect(0, 0, size.width, size.height)].size;
+  frame.origin.y += frame.size.height - frameSize.height;
+  frame.size = frameSize;
+  NSRect screen = (window.screen ?: NSScreen.mainScreen).visibleFrame;
+  frame.origin.x = MAX(NSMinX(screen), MIN(frame.origin.x, NSMaxX(screen) - frame.size.width));
+  frame.origin.y = MAX(NSMinY(screen), MIN(frame.origin.y, NSMaxY(screen) - frame.size.height));
+  [window setFrame:frame display:YES];
+  if (wasGrid == showGrid) { if (!related) [self saveWindowState]; return; }
   NSView *view = showGrid ? grid.view : table;
   scroll.documentView = view;
   view.frame = NSMakeRect(0, 0, scroll.contentSize.width, MAX(scroll.contentSize.height, view.frame.size.height));
@@ -1523,6 +1575,7 @@ static void FinderDatabaseEvents(
     if (showGrid) [grid.view scrollToItemsAtIndexPaths:[grid selectionPaths] scrollPosition:NSCollectionViewScrollPositionNearestHorizontalEdge | NSCollectionViewScrollPositionNearestVerticalEdge];
     else [table scrollRowToVisible:table.selectedRow];
   }
+  if (!related) [self saveWindowState];
 }
 - (void)renameSelected:(id)sender {
   FinderRelatedController *related = [self keyRelatedController];
@@ -1546,6 +1599,7 @@ static void FinderDatabaseEvents(
   self.table.frame = frame;
   self.table.tableColumns.firstObject.width = width;
   [self.table reloadData];
+  [self saveWindowState];
 }
 - (void)openRelatedForIDs:(NSArray<NSString *> *)ids parent:(NSWindow *)parent directOnly:(BOOL)directOnly {
   NSMutableArray<NSString *> *seeds = [NSMutableArray array];
