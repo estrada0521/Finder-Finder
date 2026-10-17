@@ -552,6 +552,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @interface FinderGridView : NSCollectionView
 @property(nonatomic, weak) FinderGridController *gridOwner;
 @property(nonatomic) BOOL beganDrag;
+@property(nonatomic) NSIndexPath *selectionAnchor;
 @end
 
 @interface FinderGridController : NSObject <NSCollectionViewDataSource, NSCollectionViewDelegate>
@@ -630,6 +631,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.synchronizing = NO;
 }
 - (void)reload {
+  self.view.selectionAnchor = nil;
   self.synchronizing = YES;
   [self.view reloadData];
   self.view.selectionIndexPaths = [self selectionPaths];
@@ -692,6 +694,24 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (void)mouseDown:(NSEvent *)event {
   NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  if (path && (event.modifierFlags & NSEventModifierFlagShift)) {
+    NSIndexPath *anchor = self.selectionAnchor;
+    if (!anchor || anchor.item < 0 || (NSUInteger)anchor.item >= self.gridOwner.records.count) {
+      anchor = [self.selectionIndexPaths.allObjects sortedArrayUsingSelector:@selector(compare:)].firstObject ?: path;
+    }
+    NSUInteger first = MIN(anchor.item, path.item), last = MAX(anchor.item, path.item);
+    NSMutableSet<NSIndexPath *> *selection = (event.modifierFlags & NSEventModifierFlagCommand)
+        ? self.selectionIndexPaths.mutableCopy : [NSMutableSet set];
+    for (NSUInteger item = first; item <= last; item++) {
+      [selection addObject:[NSIndexPath indexPathForItem:item inSection:0]];
+    }
+    self.selectionAnchor = anchor;
+    [self.window makeFirstResponder:self];
+    self.selectionIndexPaths = selection;
+    [self.gridOwner syncSelection];
+    return;
+  }
+  self.selectionAnchor = path;
   BOOL selected = path && [self.selectionIndexPaths containsObject:path];
   self.beganDrag = NO;
   [super mouseDown:event];
