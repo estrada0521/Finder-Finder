@@ -43,7 +43,10 @@ static void FinderDatabaseEvents(
 );
 
 @protocol FinderPayloadDragOwner <NSObject>
-- (void)beginPayloadDragFromTable:(NSTableView *)table event:(NSEvent *)event;
+- (void)beginPayloadDragFromView:(NSView *)view event:(NSEvent *)event;
+- (void)openSelected;
+- (void)quickLookSelected;
+- (NSMenu *)contextMenuForRow:(NSInteger)row;
 @end
 
 static NSArray<NSURL *> *FinderDroppedFileURLs(id<NSDraggingInfo> info) {
@@ -131,9 +134,9 @@ static void FinderChangePayloads(NSString *kind, NSString *recordId, NSWindow *p
   }];
 }
 
-static void FinderBeginPayloadDrag(NSTableView *table, NSEvent *event, NSArray<NSURL *> *urls) {
+static void FinderBeginPayloadDrag(NSView *view, NSEvent *event, NSArray<NSURL *> *urls) {
   if (!urls.count) return;
-  NSPoint point = [table convertPoint:event.locationInWindow fromView:nil];
+  NSPoint point = [view convertPoint:event.locationInWindow fromView:nil];
   NSMutableArray<NSDraggingItem *> *items = [NSMutableArray arrayWithCapacity:urls.count];
   for (NSURL *url in urls) {
     NSDraggingItem *item = [[NSDraggingItem alloc] initWithPasteboardWriter:url];
@@ -141,21 +144,7 @@ static void FinderBeginPayloadDrag(NSTableView *table, NSEvent *event, NSArray<N
     [item setDraggingFrame:NSMakeRect(point.x - 14, point.y - 14, 28, 28) contents:icon];
     [items addObject:item];
   }
-  [table beginDraggingSessionWithItems:items event:event source:(id<NSDraggingSource>)table];
-}
-
-static void FinderSelectRow(NSTableView *table, NSInteger row, NSEventModifierFlags modifiers, BOOL wasSelected) {
-  if (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) {
-    NSMutableIndexSet *selection = table.selectedRowIndexes.mutableCopy;
-    if (wasSelected) [selection removeIndex:(NSUInteger)row]; else [selection addIndex:(NSUInteger)row];
-    [table selectRowIndexes:selection byExtendingSelection:NO];
-  } else if (modifiers & NSEventModifierFlagShift) {
-    NSInteger anchor = table.selectedRow >= 0 ? table.selectedRow : row;
-    NSRange range = NSMakeRange((NSUInteger)MIN(anchor, row), (NSUInteger)labs(anchor - row) + 1);
-    [table selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:range] byExtendingSelection:NO];
-  } else if (!wasSelected) {
-    [table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
-  }
+  [view beginDraggingSessionWithItems:items event:event source:(id<NSDraggingSource>)view];
 }
 
 static NSArray<NSDictionary *> *FinderRelatedItems(NSDictionary *catalog) {
@@ -247,9 +236,14 @@ static NSView *FinderWindowContent(NSWindow *window) {
   return root;
 }
 
-@interface FinderNativeTable : NSTableView
+@interface FinderRecordTable : NSTableView <NSDraggingSource>
 @property(nonatomic, weak) id<FinderPayloadDragOwner> owner;
 @property(nonatomic) NSInteger hoveredRow;
+@property(nonatomic) NSInteger selectionAnchor;
+- (void)reloadPresentation;
+@end
+
+@interface FinderNativeTable : FinderRecordTable
 @end
 
 typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResizeEdgeBottom, FinderResizeEdgeCorner };
@@ -287,7 +281,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 
 @interface FinderRelatedController : NSObject <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, FinderPayloadDragOwner>
 @property(nonatomic) NSWindow *window;
-@property(nonatomic) NSTableView *table;
+@property(nonatomic) FinderRecordTable *table;
 @property(nonatomic) NSScrollView *scroll;
 @property(nonatomic) FinderGridController *grid;
 @property(nonatomic) FinderDragHeader *header;
@@ -305,8 +299,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)removeLinkForContextRow:(id)sender;  // representedObject id, else the selected row
 @end
 
-@interface FinderRelatedTable : NSTableView
-@property(nonatomic, weak) FinderRelatedController *owner;
+@interface FinderRelatedTable : FinderRecordTable
 @end
 
 @interface FinderNativeController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, FinderPayloadDragOwner>
@@ -341,63 +334,121 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (NSMenu *)rowContextMenu;  // per-row actions, shared by both windows' tables
 @end
 
-@implementation FinderNativeTable
+// Both presentations use the table as their selection model. Only hit testing
+// and native arrow-key navigation belong to the individual views.
+static BOOL FinderRecordSpaceKey(NSEvent *event, FinderRecordTable *table) {
+  NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
+      && [event.charactersIgnoringModifiers isEqualToString:@" "] && table.selectedRow >= 0) {
+    [table.owner quickLookSelected];
+    return YES;
+  }
+  return NO;
+}
+
+static void FinderSelectRecord(FinderRecordTable *table, NSInteger row, NSEventModifierFlags modifiers) {
+  BOOL selected = [table.selectedRowIndexes containsIndex:(NSUInteger)row];
+  if (modifiers & NSEventModifierFlagShift) {
+    NSInteger anchor = table.selectionAnchor;
+    if (anchor < 0 || anchor >= table.numberOfRows) anchor = table.selectedRow >= 0 ? table.selectedRow : row;
+    NSMutableIndexSet *selection = (modifiers & NSEventModifierFlagCommand) ? table.selectedRowIndexes.mutableCopy : [NSMutableIndexSet indexSet];
+    [selection addIndexesInRange:NSMakeRange((NSUInteger)MIN(anchor, row), (NSUInteger)labs(anchor - row) + 1)];
+    table.selectionAnchor = anchor;
+    [table selectRowIndexes:selection byExtendingSelection:NO];
+  } else {
+    table.selectionAnchor = row;
+    if (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) {
+      NSMutableIndexSet *selection = table.selectedRowIndexes.mutableCopy;
+      if (selected) [selection removeIndex:(NSUInteger)row]; else [selection addIndex:(NSUInteger)row];
+      [table selectRowIndexes:selection byExtendingSelection:NO];
+    } else if (!selected) {
+      [table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    }
+  }
+}
+
+static BOOL FinderRecordMouseDown(NSView *view, FinderRecordTable *table, NSInteger row, NSEvent *event) {
+  if (row < 0) { table.selectionAnchor = -1; [table deselectAll:nil]; return NO; }
+  [view.window makeFirstResponder:view];
+  NSEventModifierFlags modifiers = event.modifierFlags;
+  BOOL selected = [table.selectedRowIndexes containsIndex:(NSUInteger)row];
+  BOOL open = (modifiers & NSEventModifierFlagOption) != 0;
+  BOOL extend = (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagShift)) != 0;
+  if (open && selected) { [table.owner openSelected]; return YES; }
+  FinderSelectRecord(table, row, modifiers);
+  if (table.selectedRow < 0) return YES;
+  if (open) { [table.owner openSelected]; return YES; }
+  while (YES) {
+    NSEvent *next = [view.window nextEventMatchingMask:NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged];
+    if (!next) return YES;
+    if (next.type == NSEventTypeLeftMouseDragged) {
+      [table.owner beginPayloadDragFromView:view event:event]; return YES;
+    }
+    if (next.type == NSEventTypeLeftMouseUp) {
+      if (selected && !extend) [table.owner quickLookSelected];
+      return YES;
+    }
+  }
+}
+
+static NSMenu *FinderRecordMenu(FinderRecordTable *table, NSInteger row) {
+  if (row < 0) return nil;
+  if (![table.selectedRowIndexes containsIndex:(NSUInteger)row]) {
+    table.selectionAnchor = row;
+    [table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+  }
+  return [table.owner contextMenuForRow:row];
+}
+
+static BOOL FinderRecordDrop(NSView *view, id<NSDraggingInfo> sender) {
+  if (FinderDragIsInternal(sender)) return NO;
+  return [(id)view.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)];
+}
+
+static void FinderTrackRecordHover(NSView *view) {
+  for (NSTrackingArea *area in view.trackingAreas.copy) if (area.owner == view) [view removeTrackingArea:area];
+  [view addTrackingArea:[[NSTrackingArea alloc] initWithRect:view.bounds options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:view userInfo:nil]];
+}
+
+@implementation FinderRecordTable
+- (instancetype)initWithFrame:(NSRect)frame {
+  if (!(self = [super initWithFrame:frame])) return nil;
+  self.selectionAnchor = -1; self.hoveredRow = -1;
+  return self;
+}
 - (void)reloadData {
+  self.selectionAnchor = -1; self.hoveredRow = -1;
   [super reloadData];
   [[NSNotificationCenter defaultCenter] postNotificationName:@"FinderRecordsReloaded" object:self];
 }
+- (void)reloadPresentation {
+  NSInteger anchor = self.selectionAnchor;
+  [self reloadData];
+  self.selectionAnchor = anchor < self.numberOfRows ? anchor : -1;
+}
 - (void)keyDown:(NSEvent *)event {
-  NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
-  if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
-      && [event.charactersIgnoringModifiers isEqualToString:@" "] && self.selectedRow >= 0) {
-    [(FinderNativeController *)self.owner quickLook:nil];
-    return;
-  }
+  if (FinderRecordSpaceKey(event, self)) return;
   [super keyDown:event];
+  if (!(event.modifierFlags & NSEventModifierFlagShift)) self.selectionAnchor = self.selectedRow;
 }
 - (void)mouseDown:(NSEvent *)event {
-  NSEventModifierFlags modifiers = event.modifierFlags;
-  BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
-  BOOL extendSelection = (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl)) != 0;
-  NSInteger clickedRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  BOOL wasSelected = clickedRow >= 0 && [self.selectedRowIndexes containsIndex:(NSUInteger)clickedRow];
-  if (clickedRow < 0) { [super mouseDown:event]; return; }
-  if (openOriginal && wasSelected) {
-    [(FinderNativeController *)self.owner performSelector:@selector(open:) withObject:nil];
-    return;
-  }
-  FinderSelectRow(self, clickedRow, modifiers, wasSelected);
-  if (self.selectedRow < 0) return;
-  FinderNativeController *controller = (FinderNativeController *)self.owner;
-  if (openOriginal) [controller performSelector:@selector(open:) withObject:nil];
-  if (openOriginal) return;
-  while (YES) {
-    NSEvent *next = [self.window nextEventMatchingMask:NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged];
-    if (next.type == NSEventTypeLeftMouseDragged) {
-      [self.owner beginPayloadDragFromTable:self event:event];
-      return;
-    }
-    if (next.type == NSEventTypeLeftMouseUp) {
-      if (!extendSelection && wasSelected) [controller performSelector:@selector(quickLook:) withObject:nil];
-      return;
-    }
-  }
-}
-- (void)updateTrackingAreas {
-  [super updateTrackingAreas];
-  [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds options:NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect owner:self userInfo:nil]];
-}
-- (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
-- (NSMenu *)menuForEvent:(NSEvent *)event {
   NSInteger row = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  if (row < 0) return nil;
-  if (![self.selectedRowIndexes containsIndex:(NSUInteger)row])
-    [self selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
-  return [(FinderNativeController *)self.owner rowContextMenu];
+  if (!FinderRecordMouseDown(self, self, row, event)) [super mouseDown:event];
+}
+- (void)updateTrackingAreas { [super updateTrackingAreas]; FinderTrackRecordHover(self); }
+- (void)mouseMoved:(NSEvent *)event { self.hoveredRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]; }
+- (void)mouseExited:(NSEvent *)event { self.hoveredRow = -1; }
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  return FinderRecordMenu(self, [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]]);
 }
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { if (FinderDragIsInternal(sender)) return NO; return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender) != NSDragOperationNone; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderRecordDrop(self, sender); }
+@end
+
+@implementation FinderNativeTable
 @end
 
 @implementation FinderResizeGrip
@@ -549,22 +600,18 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @interface FinderGridItem : NSCollectionViewItem
 @end
 
-@interface FinderGridView : NSCollectionView
+@interface FinderGridView : NSCollectionView <NSDraggingSource>
 @property(nonatomic, weak) FinderGridController *gridOwner;
-@property(nonatomic) BOOL beganDrag;
-@property(nonatomic) NSIndexPath *selectionAnchor;
 @end
 
 @interface FinderGridController : NSObject <NSCollectionViewDataSource, NSCollectionViewDelegate>
 @property(nonatomic) FinderGridView *view;
-@property(nonatomic, weak) NSTableView *table;
+@property(nonatomic, weak) FinderRecordTable *table;
 @property(nonatomic, weak) id owner;
 @property(nonatomic) BOOL synchronizing;
-- (instancetype)initWithOwner:(id)owner table:(NSTableView *)table;
+- (instancetype)initWithOwner:(id)owner table:(FinderRecordTable *)table;
 - (NSArray *)records;
 - (void)reload;
-- (void)open;
-- (void)quickLook;
 @end
 
 @implementation FinderGridItem
@@ -590,7 +637,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderGridController
-- (instancetype)initWithOwner:(id)owner table:(NSTableView *)table {
+- (instancetype)initWithOwner:(id)owner table:(FinderRecordTable *)table {
   if (!(self = [super init])) return nil;
   self.owner = owner; self.table = table;
   self.view = [[FinderGridView alloc] initWithFrame:NSMakeRect(0, 0, 300, 384)];
@@ -631,7 +678,6 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   self.synchronizing = NO;
 }
 - (void)reload {
-  self.view.selectionAnchor = nil;
   self.synchronizing = YES;
   [self.view reloadData];
   self.view.selectionIndexPaths = [self selectionPaths];
@@ -659,83 +705,31 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 }
 - (void)collectionView:(NSCollectionView *)view didSelectItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths { [self syncSelection]; }
 - (void)collectionView:(NSCollectionView *)view didDeselectItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths { [self syncSelection]; }
-- (void)open {
-  if ([self.owner isKindOfClass:FinderRelatedController.class]) [(FinderRelatedController *)self.owner openSelected];
-  else [self.owner performSelector:@selector(open:) withObject:nil];
-}
-- (void)quickLook {
-  if ([self.owner isKindOfClass:FinderRelatedController.class]) [(FinderRelatedController *)self.owner quickLookSelected];
-  else [(FinderNativeController *)self.owner quickLook:nil];
-}
-- (BOOL)collectionView:(NSCollectionView *)view canDragItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths withEvent:(NSEvent *)event { return paths.count > 0; }
-- (void)collectionView:(NSCollectionView *)view draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)point forItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths {
-  self.view.beganDrag = YES;
-}
-- (NSArray<NSURL *> *)payloadURLsForPaths:(NSSet<NSIndexPath *> *)paths {
-  NSMutableArray *urls = [NSMutableArray array];
-  for (NSIndexPath *path in [paths.allObjects sortedArrayUsingSelector:@selector(compare:)]) {
-    NSDictionary *record = self.records[path.item];
-    NSString *kind = record[@"kind"] ?: ((FinderNativeController *)NSApp.delegate).activeKind;
-    [urls addObjectsFromArray:FinderPayloadURLs(kind, @[record[@"id"]])];
-  }
-  return urls;
-}
-- (BOOL)collectionView:(NSCollectionView *)view writeItemsAtIndexPaths:(NSSet<NSIndexPath *> *)paths toPasteboard:(NSPasteboard *)pasteboard {
-  return [pasteboard writeObjects:[self payloadURLsForPaths:paths]];
-}
+
 @end
 
 @implementation FinderGridView
+- (NSInteger)recordAtEvent:(NSEvent *)event {
+  NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  return path ? path.item : -1;
+}
 - (void)keyDown:(NSEvent *)event {
-  if ([event.charactersIgnoringModifiers isEqualToString:@" "] && !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption))) {
-    [self.gridOwner quickLook]; return;
-  }
+  if (FinderRecordSpaceKey(event, self.gridOwner.table)) return;
   [super keyDown:event];
+  if (!(event.modifierFlags & NSEventModifierFlagShift)) self.gridOwner.table.selectionAnchor = self.gridOwner.table.selectedRow;
 }
 - (void)mouseDown:(NSEvent *)event {
-  NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  if (path && (event.modifierFlags & NSEventModifierFlagShift)) {
-    NSIndexPath *anchor = self.selectionAnchor;
-    if (!anchor || anchor.item < 0 || (NSUInteger)anchor.item >= self.gridOwner.records.count) {
-      anchor = [self.selectionIndexPaths.allObjects sortedArrayUsingSelector:@selector(compare:)].firstObject ?: path;
-    }
-    NSUInteger first = MIN(anchor.item, path.item), last = MAX(anchor.item, path.item);
-    NSMutableSet<NSIndexPath *> *selection = (event.modifierFlags & NSEventModifierFlagCommand)
-        ? self.selectionIndexPaths.mutableCopy : [NSMutableSet set];
-    for (NSUInteger item = first; item <= last; item++) {
-      [selection addObject:[NSIndexPath indexPathForItem:item inSection:0]];
-    }
-    self.selectionAnchor = anchor;
-    [self.window makeFirstResponder:self];
-    self.selectionIndexPaths = selection;
-    [self.gridOwner syncSelection];
-    return;
-  }
-  self.selectionAnchor = path;
-  BOOL selected = path && [self.selectionIndexPaths containsObject:path];
-  self.beganDrag = NO;
-  [super mouseDown:event];
-  if (!path || self.beganDrag) return;
-  if ((event.modifierFlags & NSEventModifierFlagOption) || event.clickCount > 1) [self.gridOwner open];
-  else if (selected && !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagShift))) [self.gridOwner quickLook];
+  if (!FinderRecordMouseDown(self, self.gridOwner.table, [self recordAtEvent:event], event)) [super mouseDown:event];
 }
-- (NSMenu *)menuForEvent:(NSEvent *)event {
-  NSIndexPath *path = [self indexPathForItemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  if (!path) return nil;
-  if (![self.selectionIndexPaths containsObject:path]) {
-    self.selectionIndexPaths = [NSSet setWithObject:path];
-    [self.gridOwner syncSelection];
-  }
-  id owner = self.gridOwner.owner;
-  return [owner isKindOfClass:FinderRelatedController.class] ? [owner contextMenuForRow:path.item] : [owner rowContextMenu];
-}
+- (NSMenu *)menuForEvent:(NSEvent *)event { return FinderRecordMenu(self.gridOwner.table, [self recordAtEvent:event]); }
+- (void)updateTrackingAreas { [super updateTrackingAreas]; FinderTrackRecordHover(self); }
+- (void)mouseMoved:(NSEvent *)event { self.gridOwner.table.hoveredRow = [self recordAtEvent:event]; }
+- (void)mouseExited:(NSEvent *)event { self.gridOwner.table.hoveredRow = -1; }
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
 - (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender) != NSDragOperationNone; }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-  if (FinderDragIsInternal(sender)) return NO;
-  return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)];
-}
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { return FinderRecordDrop(self, sender); }
 @end
 
 @implementation FinderRelatedController
@@ -830,9 +824,9 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 - (void)openSelected {
   [self actOnSelected:@"open"];
 }
-- (void)beginPayloadDragFromTable:(NSTableView *)table event:(NSEvent *)event {
+- (void)beginPayloadDragFromView:(NSView *)view event:(NSEvent *)event {
   NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *idsByKind = [NSMutableDictionary dictionary];
-  [table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
+  [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *stop) {
     (void)stop;
     NSDictionary *item = self.items[row];
     NSString *kind = item[@"kind"];
@@ -843,7 +837,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   }];
   NSMutableArray<NSURL *> *urls = [NSMutableArray array];
   for (NSString *kind in idsByKind) [urls addObjectsFromArray:FinderPayloadURLs(kind, idsByKind[kind])];
-  FinderBeginPayloadDrag(table, event, urls);
+  FinderBeginPayloadDrag(view, event, urls);
 }
 - (void)windowDidBecomeKey:(NSNotification *)notification { lastKeyWindow = self.window; }
 - (void)windowWillClose:(NSNotification *)notification {
@@ -857,7 +851,7 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
   frame.size.width = width;
   self.table.frame = frame;
   self.table.tableColumns.firstObject.width = width;
-  [self.table reloadData];
+  [self.table reloadPresentation];
 }
 - (void)quickLookSelected {
   if (self.table.selectedRow < 0) return;
@@ -951,52 +945,6 @@ typedef NS_ENUM(NSInteger, FinderResizeEdge) { FinderResizeEdgeRight, FinderResi
 @end
 
 @implementation FinderRelatedTable
-- (void)reloadData {
-  [super reloadData];
-  [[NSNotificationCenter defaultCenter] postNotificationName:@"FinderRecordsReloaded" object:self];
-}
-- (void)keyDown:(NSEvent *)event {
-  NSEventModifierFlags modifiers = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
-  if (!(modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagOption | NSEventModifierFlagControl | NSEventModifierFlagShift))
-      && [event.charactersIgnoringModifiers isEqualToString:@" "] && self.selectedRow >= 0) {
-    [self.owner quickLookSelected];
-    return;
-  }
-  [super keyDown:event];
-}
-- (void)mouseDown:(NSEvent *)event {
-  NSEventModifierFlags modifiers = event.modifierFlags;
-  BOOL openOriginal = (modifiers & NSEventModifierFlagOption) != 0;
-  BOOL extendSelection = (modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift | NSEventModifierFlagControl)) != 0;
-  NSInteger clickedRow = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  BOOL wasSelected = clickedRow >= 0 && [self.selectedRowIndexes containsIndex:(NSUInteger)clickedRow];
-  if (clickedRow < 0) { [super mouseDown:event]; return; }
-  if (openOriginal && wasSelected) { [self.owner openSelected]; return; }
-  FinderSelectRow(self, clickedRow, modifiers, wasSelected);
-  if (self.selectedRow < 0) return;
-  if (openOriginal) { [self.owner openSelected]; return; }
-  while (YES) {
-    NSEvent *next = [self.window nextEventMatchingMask:NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged];
-    if (next.type == NSEventTypeLeftMouseDragged) {
-      [self.owner beginPayloadDragFromTable:self event:event];
-      return;
-    }
-    if (next.type == NSEventTypeLeftMouseUp) {
-      if (!extendSelection && wasSelected) [self.owner quickLookSelected];
-      return;
-    }
-  }
-}
-- (NSMenu *)menuForEvent:(NSEvent *)event {
-  NSInteger row = [self rowAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-  if (row < 0) return nil;
-  if (![self.selectedRowIndexes containsIndex:(NSUInteger)row])
-    [self selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
-  return [self.owner contextMenuForRow:row];
-}
-- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context { return NSDragOperationCopy; }
-- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender { return FinderPayloadDropOperation(sender); }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender { if (FinderDragIsInternal(sender)) return NO; return [(id)self.window.contentView acceptFileDrop:FinderDroppedFileURLs(sender)]; }
 @end
 
 static void FinderDatabaseEvents(
@@ -1014,6 +962,9 @@ static void FinderDatabaseEvents(
 
 @implementation FinderNativeController
 
+- (void)openSelected { [self open:nil]; }
+- (void)quickLookSelected { [self quickLook:nil]; }
+- (NSMenu *)contextMenuForRow:(NSInteger)row { return [self rowContextMenu]; }
 - (void)applicationDidFinishLaunching:(NSNotification *)note { [self setupMainWindow]; }
 - (void)applicationWillTerminate:(NSNotification *)note { [self saveWindowState]; }
 - (void)saveWindowState {
@@ -1462,8 +1413,8 @@ static void FinderDatabaseEvents(
   return ids;
 }
 - (NSString *)kind { return self.activeKind ?: @""; }
-- (void)beginPayloadDragFromTable:(NSTableView *)table event:(NSEvent *)event {
-  FinderBeginPayloadDrag(table, event, FinderPayloadURLs(self.kind, self.selectedIds));
+- (void)beginPayloadDragFromView:(NSView *)view event:(NSEvent *)event {
+  FinderBeginPayloadDrag(view, event, FinderPayloadURLs(self.kind, self.selectedIds));
 }
 - (void)act:(NSString *)action {
   NSArray *ids = self.selectedIds; if (!ids.count && ![action isEqual:@"reveal"] && ![action isEqual:@"copy"] && ![action isEqual:@"copy-relative"]) return;
@@ -1576,7 +1527,7 @@ static void FinderDatabaseEvents(
 - (void)selectViewMode:(NSMenuItem *)sender {
   FinderRelatedController *related = [self keyRelatedController];
   NSWindow *window = related ? related.window : self.window;
-  NSTableView *table = related ? related.table : self.table;
+  FinderRecordTable *table = related ? related.table : self.table;
   NSScrollView *scroll = related ? related.scroll : self.scroll;
   FinderGridController *grid = related ? related.grid : self.grid;
   BOOL showGrid = [sender.representedObject isEqualToString:@"Grid"];
@@ -1598,7 +1549,7 @@ static void FinderDatabaseEvents(
   NSView *view = showGrid ? grid.view : table;
   scroll.documentView = view;
   view.frame = NSMakeRect(0, 0, scroll.contentSize.width, MAX(scroll.contentSize.height, view.frame.size.height));
-  if (showGrid) [grid reload]; else [table reloadData];
+  if (showGrid) [grid reload]; else [table reloadPresentation];
   [window makeFirstResponder:view];
   if (table.selectedRow >= 0) {
     if (showGrid) [grid.view scrollToItemsAtIndexPaths:[grid selectionPaths] scrollPosition:NSCollectionViewScrollPositionNearestHorizontalEdge | NSCollectionViewScrollPositionNearestVerticalEdge];
@@ -1608,7 +1559,7 @@ static void FinderDatabaseEvents(
 }
 - (void)renameSelected:(id)sender {
   FinderRelatedController *related = [self keyRelatedController];
-  NSTableView *table = related ? related.table : self.table;
+  FinderRecordTable *table = related ? related.table : self.table;
   NSArray *rows = related ? related.items : self.records;
   if (table.selectedRowIndexes.count != 1) return;
   NSDictionary *record = rows[(NSUInteger)table.selectedRow];
@@ -1627,7 +1578,7 @@ static void FinderDatabaseEvents(
   frame.size.width = width;
   self.table.frame = frame;
   self.table.tableColumns.firstObject.width = width;
-  [self.table reloadData];
+  [self.table reloadPresentation];
   [self scheduleWindowStateSave];
 }
 - (void)openRelatedForIDs:(NSArray<NSString *> *)ids parent:(NSWindow *)parent directOnly:(BOOL)directOnly {
@@ -1690,7 +1641,7 @@ static void FinderDatabaseEvents(
   }
   if (item.action == @selector(renameSelected:)) {
     FinderRelatedController *related = [self keyRelatedController];
-    NSTableView *table = related ? related.table : self.table;
+    FinderRecordTable *table = related ? related.table : self.table;
     NSWindow *window = related ? related.window : self.window;
     NSView *view = related ? related.scroll.documentView : self.scroll.documentView;
     return NSApp.modalWindow == nil && window.firstResponder == view
